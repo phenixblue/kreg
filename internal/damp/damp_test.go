@@ -29,6 +29,12 @@ import (
 	"github.com/phenixblue/kreg/internal/pipeline"
 )
 
+const (
+	atl1Address     = "198.51.100.10/32"
+	atl1            = "atl-1"
+	atl1BackendName = "198-51-100-10-32-atl-1"
+)
+
 var _ = Describe("PriorStateFromAdvertisedBackends", func() {
 	It("reconstructs a full candidate and damping info from a record Damp has evaluated before", func() {
 		serviceTag := int32(80)
@@ -36,10 +42,10 @@ var _ = Describe("PriorStateFromAdvertisedBackends", func() {
 		withdrawnAt := metav1.NewTime(observedAt.Add(-5 * time.Second))
 
 		items := []kregv1alpha1.AdvertisedBackend{{
-			ObjectMeta: metav1.ObjectMeta{Name: "198-51-100-10-32-atl-1"},
+			ObjectMeta: metav1.ObjectMeta{Name: atl1BackendName},
 			Status: kregv1alpha1.AdvertisedBackendStatus{
-				Prefix:    "198.51.100.10/32",
-				ClusterID: "atl-1",
+				Prefix:    atl1Address,
+				ClusterID: atl1,
 				Peer:      "rr-atl-a",
 				Locality:  kregv1alpha1.Locality{Region: "us-east", Zone: "us-east-atl-a"},
 				Attributes: kregv1alpha1.BackendAttributes{
@@ -63,12 +69,12 @@ var _ = Describe("PriorStateFromAdvertisedBackends", func() {
 		}}
 
 		prior := damp.PriorStateFromAdvertisedBackends(items)
-		Expect(prior).To(HaveKey("198-51-100-10-32-atl-1"))
+		Expect(prior).To(HaveKey(atl1BackendName))
 
-		p := prior["198-51-100-10-32-atl-1"]
+		p := prior[atl1BackendName]
 		Expect(p.Candidate).To(Equal(pipeline.BackendCandidate{
-			Prefix:           "198.51.100.10/32",
-			ClusterID:        "atl-1",
+			Prefix:           atl1Address,
+			ClusterID:        atl1,
 			Peer:             "rr-atl-a",
 			Locality:         pipeline.Locality{Region: "us-east", Zone: "us-east-atl-a"},
 			MED:              100,
@@ -85,6 +91,29 @@ var _ = Describe("PriorStateFromAdvertisedBackends", func() {
 		Expect(p.Damping.WithdrawnAt).To(gstruct.PointTo(Equal(withdrawnAt.Time)))
 		Expect(p.Damping.SuppressedSince).To(BeNil())
 		Expect(p.Damping.PendingSince).To(BeNil())
+	})
+
+	It("normalizes a Draining record's damping state back to Active", func() {
+		// report.stateAndReason sets status.state to Draining when Damp
+		// itself said Active but the candidate's community-driven Drain
+		// flag is set -- DampingInfo.State's contract only ever holds
+		// Active/Pending/HoldDown/Dampened, so this must not leak through.
+		observedAt := metav1.NewTime(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+		items := []kregv1alpha1.AdvertisedBackend{{
+			ObjectMeta: metav1.ObjectMeta{Name: atl1BackendName},
+			Status: kregv1alpha1.AdvertisedBackendStatus{
+				Prefix:    atl1Address,
+				ClusterID: atl1,
+				State:     kregv1alpha1.BackendStateDraining,
+				Reason:    "",
+				Stability: kregv1alpha1.StabilityStatus{LastObservedAt: &observedAt},
+			},
+		}}
+
+		prior := damp.PriorStateFromAdvertisedBackends(items)
+		p := prior[atl1BackendName]
+		Expect(p.Damping.State).To(Equal(kregv1alpha1.BackendStateActive))
+		Expect(p.Damping.Reason).To(BeEmpty())
 	})
 
 	It("omits a record Damp has never evaluated (lastObservedAt unset)", func() {

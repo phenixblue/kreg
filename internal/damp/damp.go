@@ -77,11 +77,12 @@ func PriorStateFromAdvertisedBackends(items []kregv1alpha1.AdvertisedBackend) ma
 		if stability.LastObservedAt == nil {
 			continue
 		}
+		state, reason := priorDampingState(item.Status)
 		prior[item.Name] = PriorState{
 			Candidate: candidateFromStatus(item.Status),
 			Damping: pipeline.DampingInfo{
-				State:           item.Status.State,
-				Reason:          item.Status.Reason,
+				State:           state,
+				Reason:          reason,
 				Score:           float64(stability.DampeningPenalty),
 				FlapCount24h:    stability.FlapCount24h,
 				LastObservedAt:  stability.LastObservedAt.Time,
@@ -92,6 +93,21 @@ func PriorStateFromAdvertisedBackends(items []kregv1alpha1.AdvertisedBackend) ma
 		}
 	}
 	return prior
+}
+
+// priorDampingState reconstructs DampingInfo.State from a persisted
+// record, normalizing any state Damp doesn't own back to Active.
+// AdvertisedBackendStatus.State can be Draining (report.stateAndReason
+// falls through to it when Damp said Active but the candidate's
+// community-driven Drain flag is set) or, in principle, Rejected —
+// neither is a value DampingInfo.State's contract allows.
+func priorDampingState(status kregv1alpha1.AdvertisedBackendStatus) (kregv1alpha1.BackendState, string) {
+	switch status.State {
+	case kregv1alpha1.BackendStatePending, kregv1alpha1.BackendStateHoldDown, kregv1alpha1.BackendStateDampened:
+		return status.State, status.Reason
+	default:
+		return kregv1alpha1.BackendStateActive, ""
+	}
 }
 
 // candidateFromStatus reverses internal/report.buildOne's mapping: every

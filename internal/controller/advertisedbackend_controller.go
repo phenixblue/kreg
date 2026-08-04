@@ -122,14 +122,20 @@ func (r *AdvertisedBackendReconciler) applyBackend(ctx context.Context, desired 
 	}
 }
 
-// statusChanged reports whether anything but the timestamps themselves
-// differs between old and new. Stability.LastObservedAt bumps on every
-// reconcile (Damp re-evaluates every candidate each tick) — without
-// zeroing it here too, LastChange would spuriously bump every reconcile
-// as well.
+// statusChanged reports whether anything but continuously-updating
+// bookkeeping differs between old and new. Stability.LastObservedAt
+// bumps on every reconcile (Damp re-evaluates every candidate each
+// tick); Stability.DampeningPenalty and .FlapCount24h decay a little on
+// every tick too, even with zero flaps, as long as any residual score
+// hasn't fully decayed to zero. None of the three by itself is a
+// semantic change — only a real transition (State/Reason,
+// WithdrawnAt/SuppressedSince/PendingSince entering or clearing, or
+// anything else) should bump LastChange.
 func statusChanged(old, latest kregv1alpha1.AdvertisedBackendStatus) bool {
-	old.FirstSeen, old.LastChange, old.Stability.LastObservedAt = nil, nil, nil
-	latest.FirstSeen, latest.LastChange, latest.Stability.LastObservedAt = nil, nil, nil
+	old.FirstSeen, old.LastChange = nil, nil
+	old.Stability.LastObservedAt, old.Stability.DampeningPenalty, old.Stability.FlapCount24h = nil, 0, 0
+	latest.FirstSeen, latest.LastChange = nil, nil
+	latest.Stability.LastObservedAt, latest.Stability.DampeningPenalty, latest.Stability.FlapCount24h = nil, 0, 0
 	return !reflect.DeepEqual(old, latest)
 }
 

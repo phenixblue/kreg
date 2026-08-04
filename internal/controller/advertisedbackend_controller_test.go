@@ -170,6 +170,49 @@ var _ = Describe("AdvertisedBackend Controller", func() {
 		Expect(backend.Status.Stability.LastObservedAt.Time).To(Equal(holdDown.Damping.LastObservedAt))
 	})
 
+	It("doesn't bump LastChange when only the decaying penalty/flap count drift", func() {
+		// DampeningPenalty and FlapCount24h decay a little on every tick,
+		// even with zero new flaps, as long as any residual score hasn't
+		// fully decayed to zero -- neither is a semantic change by itself.
+		active := pipeline.BackendCandidate{
+			Prefix:    testAtl1Address,
+			ClusterID: testAtl1,
+			Damping: &pipeline.DampingInfo{
+				State:          kregv1alpha1.BackendStateActive,
+				Score:          933,
+				FlapCount24h:   1,
+				LastObservedAt: time.Now(),
+			},
+		}
+
+		r := &AdvertisedBackendReconciler{
+			Client:   k8sClient,
+			Scheme:   k8sClient.Scheme(),
+			Snapshot: fakeSnapshotSource{candidates: []pipeline.BackendCandidate{active}},
+		}
+		_, err := r.Reconcile(ctx, reconcile.Request{})
+		Expect(err).NotTo(HaveOccurred())
+
+		var backend kregv1alpha1.AdvertisedBackend
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: testAtl1BackendName}, &backend)).To(Succeed())
+		lastChange := backend.Status.LastChange.Time
+
+		By("reconciling again with the score/flap count decayed further, state/reason unchanged")
+		active.Damping = &pipeline.DampingInfo{
+			State:          kregv1alpha1.BackendStateActive,
+			Score:          812, // decayed from 933, still nonzero
+			FlapCount24h:   1,
+			LastObservedAt: time.Now(),
+		}
+		r.Snapshot = fakeSnapshotSource{candidates: []pipeline.BackendCandidate{active}}
+		_, err = r.Reconcile(ctx, reconcile.Request{})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: testAtl1BackendName}, &backend)).To(Succeed())
+		Expect(backend.Status.LastChange.Time).To(Equal(lastChange))
+		Expect(backend.Status.Stability.DampeningPenalty).To(Equal(int32(812)))
+	})
+
 	It("never deletes an AdvertisedBackend it didn't create", func() {
 		// pruneStaleBackends must only ever consider objects carrying this
 		// reconciler's own ManagedByLabel — an object of this kind created
