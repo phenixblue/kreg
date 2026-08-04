@@ -62,6 +62,7 @@ rules:
 - apiGroups:
   - kreg.twr.dev
   resources:
+  - bgpstabilityconfigs
   - communitymaps
   verbs:
   - get

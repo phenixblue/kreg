@@ -38,6 +38,7 @@ import (
 
 	kregv1alpha1 "github.com/phenixblue/kreg/api/v1alpha1"
 	"github.com/phenixblue/kreg/internal/controller"
+	"github.com/phenixblue/kreg/internal/damp/ewma"
 	"github.com/phenixblue/kreg/internal/ingest"
 	"github.com/phenixblue/kreg/internal/snapshot"
 	// +kubebuilder:scaffold:imports
@@ -206,6 +207,7 @@ func main() {
 	snapshotSource := &snapshot.Source{
 		Client: mgr.GetClient(),
 		RIB:    ingestManager,
+		Damper: ewma.Damper{},
 	}
 
 	if err := (&controller.BGPBackendPolicyReconciler{

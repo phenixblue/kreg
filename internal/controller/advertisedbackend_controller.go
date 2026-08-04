@@ -123,10 +123,13 @@ func (r *AdvertisedBackendReconciler) applyBackend(ctx context.Context, desired 
 }
 
 // statusChanged reports whether anything but the timestamps themselves
-// differs between old and new.
+// differs between old and new. Stability.LastObservedAt bumps on every
+// reconcile (Damp re-evaluates every candidate each tick) — without
+// zeroing it here too, LastChange would spuriously bump every reconcile
+// as well.
 func statusChanged(old, latest kregv1alpha1.AdvertisedBackendStatus) bool {
-	old.FirstSeen, old.LastChange = nil, nil
-	latest.FirstSeen, latest.LastChange = nil, nil
+	old.FirstSeen, old.LastChange, old.Stability.LastObservedAt = nil, nil, nil
+	latest.FirstSeen, latest.LastChange, latest.Stability.LastObservedAt = nil, nil, nil
 	return !reflect.DeepEqual(old, latest)
 }
 

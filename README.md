@@ -48,13 +48,14 @@ is the choice of Gateway API implementation.
 
 ## API
 
-Five kinds under `kreg.twr.dev/v1alpha1`:
+Six kinds under `kreg.twr.dev/v1alpha1`:
 
 | Kind | Scope | Purpose |
 |---|---|---|
 | `BGPPeerConfig` | Cluster | Peering config and the prefix→cluster trust boundary |
 | `CommunityMap` | Cluster | Decodes BGP communities into weight, tier, locality, drain |
 | `BGPBackendPolicy` | Namespaced | Policy attachment onto a `Gateway` or `HTTPRoute` |
+| `BGPStabilityConfig` | Cluster | Hold-down, addition debounce, and flap dampening tuning |
 | `AdvertisedBackend` | Cluster | Read-only materialized view of the RIB, for debugging |
 | `BGPGatewayClassConfig` | Cluster | Defaults inherited by policies |
 

@@ -20,6 +20,12 @@ limitations under the License.
 // need neither a BGP daemon nor a Kubernetes API server to test.
 package pipeline
 
+import (
+	"time"
+
+	kregv1alpha1 "github.com/phenixblue/kreg/api/v1alpha1"
+)
+
 // RIBRoute is one route advertisement as it would arrive from BGP ingest.
 // GoBGP ingest (build-order step 2) will produce these from a live RIB;
 // until then they come from hand-written fixtures. ClusterID and Locality
@@ -89,4 +95,48 @@ type BackendCandidate struct {
 	// reconciliation.
 	Rejected bool
 	Reason   string
+
+	// Damping is set by the Damp stage (internal/damp); nil until Damp
+	// runs, meaning "no opinion, behave as before" everywhere it's
+	// checked. See DampingInfo.
+	Damping *DampingInfo
+}
+
+// DampingInfo is the Damp stage's verdict on one BackendCandidate,
+// carried through to AdvertisedBackend.status. Score, LastObservedAt, and
+// the *Since/*At timestamps are the durable, cross-tick state a Damper
+// implementation needs — persisted via AdvertisedBackend.status between
+// reconciles rather than kept in memory, so it survives a controller
+// restart or leader failover.
+type DampingInfo struct {
+	// State is one of Active, Pending, HoldDown, or Dampened — Rejected
+	// and Draining are decided elsewhere and never appear here.
+	State  kregv1alpha1.BackendState
+	Reason string
+
+	// Score is the current flap-dampening score: decays continuously
+	// against real elapsed time, bumped by a fixed penalty on each
+	// detected flap.
+	Score float64
+
+	// FlapCount24h approximates flaps in roughly the last 24h via the
+	// same decay mechanism as Score, with a fixed 24h half-life.
+	FlapCount24h int32
+
+	// LastObservedAt is when this candidate was last evaluated by Damp —
+	// used to compute real elapsed time for decay on the next tick.
+	LastObservedAt time.Time
+
+	// WithdrawnAt is when this candidate was first observed absent from
+	// the settled snapshot; nil while present. Drives withdrawalGrace
+	// expiry.
+	WithdrawnAt *time.Time
+
+	// SuppressedSince is when this candidate most recently entered
+	// Dampened; nil otherwise. Drives the maxSuppress cap.
+	SuppressedSince *time.Time
+
+	// PendingSince is when this candidate was first observed at all;
+	// nil once past additionDelay or if additionDelay is unset.
+	PendingSince *time.Time
 }

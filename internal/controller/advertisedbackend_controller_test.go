@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -32,8 +33,9 @@ import (
 )
 
 const (
-	testAtl1Address = "198.51.100.10/32"
-	testAtl1        = "atl-1"
+	testAtl1Address     = "198.51.100.10/32"
+	testAtl1            = "atl-1"
+	testAtl1BackendName = "198-51-100-10-32-atl-1"
 )
 
 var _ = Describe("AdvertisedBackend Controller", func() {
@@ -102,7 +104,7 @@ var _ = Describe("AdvertisedBackend Controller", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		var activeBackend kregv1alpha1.AdvertisedBackend
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "198-51-100-10-32-atl-1"}, &activeBackend)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: testAtl1BackendName}, &activeBackend)).To(Succeed())
 		Expect(activeBackend.Status.State).To(Equal(kregv1alpha1.BackendStateActive))
 		Expect(activeBackend.Status.BoundPolicies).To(ConsistOf(policyNamespace + "/" + policyName))
 		Expect(activeBackend.Status.GeneratedResources).To(ConsistOf("EndpointSlice/" + policyNamespace + "/" + policyName + "-kreg-atl-1-198-51-100-10-32"))
@@ -118,7 +120,7 @@ var _ = Describe("AdvertisedBackend Controller", func() {
 		By("reconciling again with the same candidates: FirstSeen is preserved, no duplicate objects")
 		_, err = r.Reconcile(ctx, reconcile.Request{})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "198-51-100-10-32-atl-1"}, &activeBackend)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: testAtl1BackendName}, &activeBackend)).To(Succeed())
 		Expect(activeBackend.Status.FirstSeen.Time).To(Equal(firstSeen.Time))
 
 		By("reconciling with the rejected route withdrawn entirely: its record is pruned")
@@ -127,6 +129,45 @@ var _ = Describe("AdvertisedBackend Controller", func() {
 		Expect(err).NotTo(HaveOccurred())
 		err = k8sClient.Get(ctx, types.NamespacedName{Name: "203-0-113-5-32-unattributed"}, &rejectedBackend)
 		Expect(apierrors.IsNotFound(err)).To(BeTrue())
+	})
+
+	It("persists a HoldDown candidate's state without bumping LastChange on LastObservedAt alone", func() {
+		base := time.Now().Truncate(time.Second)
+		withdrawnAt := base.Add(-4 * time.Second)
+		holdDown := pipeline.BackendCandidate{
+			Prefix:    testAtl1Address,
+			ClusterID: testAtl1,
+			Damping: &pipeline.DampingInfo{
+				State:          kregv1alpha1.BackendStateHoldDown,
+				Reason:         "withdrawn 4s ago, grace 30s",
+				LastObservedAt: base,
+				WithdrawnAt:    &withdrawnAt,
+			},
+		}
+
+		r := &AdvertisedBackendReconciler{
+			Client:   k8sClient,
+			Scheme:   k8sClient.Scheme(),
+			Snapshot: fakeSnapshotSource{candidates: []pipeline.BackendCandidate{holdDown}},
+		}
+		_, err := r.Reconcile(ctx, reconcile.Request{})
+		Expect(err).NotTo(HaveOccurred())
+
+		var backend kregv1alpha1.AdvertisedBackend
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: testAtl1BackendName}, &backend)).To(Succeed())
+		Expect(backend.Status.State).To(Equal(kregv1alpha1.BackendStateHoldDown))
+		Expect(backend.Status.LastChange).NotTo(BeNil())
+		lastChange := backend.Status.LastChange.Time
+
+		By("reconciling again with only LastObservedAt advanced: LastChange doesn't bump")
+		holdDown.Damping.LastObservedAt = base.Add(5 * time.Second)
+		r.Snapshot = fakeSnapshotSource{candidates: []pipeline.BackendCandidate{holdDown}}
+		_, err = r.Reconcile(ctx, reconcile.Request{})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: testAtl1BackendName}, &backend)).To(Succeed())
+		Expect(backend.Status.LastChange.Time).To(Equal(lastChange))
+		Expect(backend.Status.Stability.LastObservedAt.Time).To(Equal(holdDown.Damping.LastObservedAt))
 	})
 
 	It("never deletes an AdvertisedBackend it didn't create", func() {

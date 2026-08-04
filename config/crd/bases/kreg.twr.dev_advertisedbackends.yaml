@@ -94,18 +94,9 @@ spec:
                 type: array
               clusterID:
                 type: string
-              dampeningPenalty:
-                format: int32
-                type: integer
               firstSeen:
                 format: date-time
                 type: string
-              flapCount24h:
-                description: |-
-                  flapCount24h and dampeningPenalty are populated once the Damper
-                  exists (build-order step 4); always zero until then.
-                format: int32
-                type: integer
               generatedResources:
                 description: |-
                   generatedResources lists what the Reconcile stage produced for this
@@ -138,17 +129,68 @@ spec:
                   reason explains a non-Active state, e.g. "prefix 203.0.113.5/32 not
                   in allowedPrefixes for any cluster".
                 type: string
+              stability:
+                description: |-
+                  stability is the Damper's hold-down/flap/suppression bookkeeping
+                  for this backend.
+                properties:
+                  dampeningPenalty:
+                    description: |-
+                      dampeningPenalty is the current flap-dampening score. Crossing
+                      BGPStabilityConfig's suppressThreshold moves state to Dampened;
+                      decaying back below reuseThreshold moves it back out.
+                    format: int32
+                    type: integer
+                  flapCount24h:
+                    description: |-
+                      flapCount24h approximates flaps in roughly the last 24h: an
+                      exponentially-decaying counter (24h half-life), not an exact
+                      sliding-window count.
+                    format: int32
+                    type: integer
+                  lastObservedAt:
+                    description: |-
+                      lastObservedAt is the wall-clock time the Damper last evaluated
+                      this backend. Distinct from AdvertisedBackendStatus.firstSeen (set
+                      once) and .lastChange (only bumps on a semantic change) — this
+                      bumps every reconcile, and is used to compute real elapsed time for
+                      EWMA decay across restarts.
+                    format: date-time
+                    type: string
+                  pendingSince:
+                    description: |-
+                      pendingSince is when this backend was first observed (never seen
+                      before); nil once past additionDelay or if additionDelay is unset.
+                    format: date-time
+                    type: string
+                  suppressedSince:
+                    description: |-
+                      suppressedSince is when this backend most recently entered
+                      Dampened; nil otherwise. Drives the maxSuppress cap.
+                    format: date-time
+                    type: string
+                  withdrawnAt:
+                    description: |-
+                      withdrawnAt is when this backend was first observed absent from
+                      the settled snapshot; nil while present. Drives withdrawalGrace
+                      expiry.
+                    format: date-time
+                    type: string
+                type: object
               state:
                 description: |-
                   BackendState mirrors where a route currently sits in the pipeline.
-                  Only Active, Draining, and Rejected are reachable before the Damper
-                  exists (build-order step 4) — HoldDown and Dampened are schema-valid
-                  but nothing sets them yet.
+                  HoldDown, Dampened, and Pending are set by the Damper stage
+                  (internal/damp): HoldDown while a withdrawn route is within its
+                  withdrawalGrace, Dampened while its flap score is above
+                  suppressThreshold, Pending while a newly-seen route is within its
+                  additionDelay.
                 enum:
                 - Active
                 - HoldDown
                 - Draining
                 - Dampened
+                - Pending
                 - Rejected
                 type: string
             type: object

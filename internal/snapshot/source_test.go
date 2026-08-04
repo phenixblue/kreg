@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kregv1alpha1 "github.com/phenixblue/kreg/api/v1alpha1"
+	"github.com/phenixblue/kreg/internal/damp/ewma"
 	"github.com/phenixblue/kreg/internal/pipeline"
 	"github.com/phenixblue/kreg/internal/snapshot"
 )
@@ -88,6 +89,7 @@ var _ = Describe("Source", func() {
 				{Prefix: atl1Address, LargeCommunities: []string{"4200000000:1:80"}},
 				{Prefix: "203.0.113.5/32"}, // outside every binding -> kept, flagged Rejected
 			}},
+			Damper: ewma.Damper{},
 		}
 
 		candidates, err := src.Snapshot(context.Background())
@@ -108,6 +110,7 @@ var _ = Describe("Source", func() {
 		src := &snapshot.Source{
 			Client: newFakeClient(docPeerConfig()),
 			RIB:    fakeRIB{routes: []pipeline.RIBRoute{{Prefix: atl1Address}}},
+			Damper: ewma.Damper{},
 		}
 
 		candidates, err := src.Snapshot(context.Background())
@@ -120,6 +123,7 @@ var _ = Describe("Source", func() {
 		src := &snapshot.Source{
 			Client: newFakeClient(),
 			RIB:    fakeRIB{routes: []pipeline.RIBRoute{{Prefix: atl1Address}}},
+			Damper: ewma.Damper{},
 		}
 
 		candidates, err := src.Snapshot(context.Background())
@@ -132,6 +136,7 @@ var _ = Describe("Source", func() {
 		src := &snapshot.Source{
 			Client: newFakeClient(),
 			RIB:    fakeRIB{err: errors.New("bgp session down")},
+			Damper: ewma.Damper{},
 		}
 
 		_, err := src.Snapshot(context.Background())
