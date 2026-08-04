@@ -199,15 +199,29 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "bgppeerconfig")
 		os.Exit(1)
 	}
-	if err := (&controller.BGPBackendPolicyReconciler{
+	// Shared by both reconcilers below — Ingest -> Authorize -> Normalize
+	// against the same live RIB, so BGPBackendPolicy's generated objects
+	// and AdvertisedBackend's materialized view can never disagree about
+	// what the settled snapshot currently is.
+	snapshotSource := &snapshot.Source{
 		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Snapshot: &snapshot.Source{
-			Client: mgr.GetClient(),
-			RIB:    ingestManager,
-		},
+		RIB:    ingestManager,
+	}
+
+	if err := (&controller.BGPBackendPolicyReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Snapshot: snapshotSource,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "bgpbackendpolicy")
+		os.Exit(1)
+	}
+	if err := (&controller.AdvertisedBackendReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Snapshot: snapshotSource,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "advertisedbackend")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

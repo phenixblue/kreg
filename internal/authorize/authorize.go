@@ -31,8 +31,11 @@ import (
 // allowedPrefixes, and attributes the origin cluster and locality from
 // whichever binding matched — never from anything the peer itself
 // asserts (RIBRoute.ClusterID and RIBRoute.Locality on the input are
-// ignored and overwritten). Routes matching no binding are dropped, not
-// passed through unattributed.
+// ignored and overwritten). Routes matching no binding are kept but
+// flagged Rejected, not dropped — internal/reconcile.Select already
+// excludes any Rejected candidate from real backend selection, but the
+// Report stage (AdvertisedBackend) needs to see why a route never made
+// it, not just its absence.
 //
 // Through a route reflector, the advertising peer address is always the
 // RR's, so prefix->cluster via allowedPrefixes containment is the only
@@ -46,6 +49,9 @@ func Authorize(routes []pipeline.RIBRoute, bindings []kregv1alpha1.ClusterBindin
 			return nil, fmt.Errorf("authorize %s: %w", route.Prefix, err)
 		}
 		if binding == nil {
+			route.Rejected = true
+			route.Reason = fmt.Sprintf("prefix %s not in allowedPrefixes for any cluster", route.Prefix)
+			authorized = append(authorized, route)
 			continue
 		}
 		route.ClusterID = binding.ClusterID

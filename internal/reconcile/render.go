@@ -129,8 +129,18 @@ func prefixWithinAny(prefix string, cidrs []string) (bool, error) {
 	return false, nil
 }
 
-func generatedName(policy *kregv1alpha1.BGPBackendPolicy) string {
+// ServiceName is the portable Service Render generates for policy.
+// Exported so other consumers of the same candidates (e.g.
+// internal/report, computing AdvertisedBackend.status.generatedResources)
+// can name-match without drifting from what Render actually produced.
+func ServiceName(policy *kregv1alpha1.BGPBackendPolicy) string {
 	return policy.Name + "-kreg"
+}
+
+// EndpointSliceName is the per-candidate EndpointSlice name Render
+// generates, given the Service name it belongs to. See ServiceName.
+func EndpointSliceName(serviceName, clusterID string) string {
+	return fmt.Sprintf("%s-%s", serviceName, clusterID)
 }
 
 func managedByLabels(policy *kregv1alpha1.BGPBackendPolicy, extra map[string]string) map[string]string {
@@ -152,7 +162,7 @@ func renderService(policy *kregv1alpha1.BGPBackendPolicy) *corev1.Service {
 	return &corev1.Service{
 		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Service"},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      generatedName(policy),
+			Name:      ServiceName(policy),
 			Namespace: policy.Namespace,
 			Labels:    managedByLabels(policy, nil),
 		},
@@ -202,7 +212,7 @@ func renderEndpointSlices(policy *kregv1alpha1.BGPBackendPolicy, serviceName str
 		slices = append(slices, &discoveryv1.EndpointSlice{
 			TypeMeta: metav1.TypeMeta{APIVersion: "discovery.k8s.io/v1", Kind: "EndpointSlice"},
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("%s-%s", serviceName, c.ClusterID),
+				Name:      EndpointSliceName(serviceName, c.ClusterID),
 				Namespace: policy.Namespace,
 				Labels: managedByLabels(policy, map[string]string{
 					discoveryv1.LabelServiceName: serviceName,

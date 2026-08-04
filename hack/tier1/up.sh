@@ -50,13 +50,20 @@ make docker-build IMG="${IMG}" >/dev/null
 kind load docker-image "${IMG}" --name "${KIND_CLUSTER_NAME}"
 "${REPO_ROOT}/bin/kustomize" build config/tier1 | sed "s|kreg-controller:tier1|${IMG}|" | kubectl --context "${KUBE_CONTEXT}" apply -f -
 
+# IMG is a fixed tag, not a per-build digest — `kubectl apply` sees the
+# same image string every run and won't roll the Deployment just because
+# the bytes behind that tag changed. Force a fresh pod unconditionally so
+# re-running this after a code change actually deploys it; best-effort
+# (`|| true`), since --ignore-not-found doesn't cover every race here.
+kubectl --context "${KUBE_CONTEXT}" -n kreg-tier1 delete pods -l control-plane=controller-manager --ignore-not-found --wait=false || true
+
 # Poll by label rather than `kubectl wait` on a resolved pod name: with
-# hostNetwork, a RollingUpdate can replace the pod mid-wait (old and new
-# can't both hold the same host port on one node), and `wait` binds to
-# the specific name(s) it saw at the start — if the pod gets replaced,
-# it waits on a name that no longer exists instead of noticing the
-# replacement succeeded. Re-querying the label selector each iteration
-# is immune to that.
+# hostNetwork, the old and new pod can't both hold the same host port on
+# one node, so the delete above can still be in flight when we start
+# waiting — `wait` binds to the specific name(s) it saw at the start, and
+# if the pod gets replaced mid-wait it waits on a name that no longer
+# exists instead of noticing the replacement succeeded. Re-querying the
+# label selector each iteration is immune to that.
 echo "waiting for controller pod..."
 ready=""
 for i in $(seq 1 45); do

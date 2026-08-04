@@ -190,4 +190,20 @@ var _ = Describe("Normalize", func() {
 		Expect(candidates[0].Weight).To(Equal(int32(80)))
 		Expect(candidates[1].Weight).To(Equal(int32(20)))
 	})
+
+	It("carries an Authorize-level rejection straight through without decoding communities", func() {
+		routes := []RIBRoute{{
+			Prefix:           "203.0.113.5/32",
+			LargeCommunities: []string{"4200000000:1:not-a-number"}, // would error if decoded
+			Rejected:         true,
+			Reason:           "prefix 203.0.113.5/32 not in allowedPrefixes for any cluster",
+		}}
+
+		candidates, err := Normalize(routes, docCommunityMap())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(candidates).To(HaveLen(1))
+		Expect(candidates[0].Rejected).To(BeTrue())
+		Expect(candidates[0].Reason).To(Equal("prefix 203.0.113.5/32 not in allowedPrefixes for any cluster"))
+		Expect(candidates[0].Weight).To(Equal(int32(0))) // not decoded, not fallback-filled
+	})
 })

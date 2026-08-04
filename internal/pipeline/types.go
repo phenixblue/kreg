@@ -47,6 +47,14 @@ type RIBRoute struct {
 	// LargeCommunities are the route's BGP large communities, each
 	// formatted as "<globalAdmin>:<function>:<value>".
 	LargeCommunities []string
+
+	// Rejected is set by Authorize when this route's prefix falls within
+	// no clusterBinding's allowedPrefixes. Rejected routes are kept, not
+	// dropped, so the Report stage (AdvertisedBackend) can show why a
+	// route never made it into service — see the "Attribution note" in
+	// docs/design/architecture.md §2.1.
+	Rejected bool
+	Reason   string
 }
 
 // Locality describes where a route's advertising cluster lives.

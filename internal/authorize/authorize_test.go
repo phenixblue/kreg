@@ -67,12 +67,15 @@ var _ = Describe("Authorize", func() {
 		Expect(authorized[1].ClusterID).To(Equal("atl-2"))
 	})
 
-	It("drops a route matching no binding, rather than passing it through unattributed", func() {
+	It("keeps a route matching no binding, flagged Rejected rather than attributed", func() {
 		routes := []pipeline.RIBRoute{{Prefix: "203.0.113.5/32"}}
 
 		authorized, err := authorize.Authorize(routes, docBindings())
 		Expect(err).NotTo(HaveOccurred())
-		Expect(authorized).To(BeEmpty())
+		Expect(authorized).To(HaveLen(1))
+		Expect(authorized[0].Rejected).To(BeTrue())
+		Expect(authorized[0].Reason).NotTo(BeEmpty())
+		Expect(authorized[0].ClusterID).To(BeEmpty())
 	})
 
 	It("ignores a peer-asserted ClusterID and re-derives it from prefix position", func() {
@@ -88,12 +91,13 @@ var _ = Describe("Authorize", func() {
 		Expect(authorized[0].ClusterID).To(Equal("atl-2"))
 	})
 
-	It("drops every route when there are no bindings at all", func() {
+	It("rejects every route when there are no bindings at all", func() {
 		routes := []pipeline.RIBRoute{{Prefix: "198.51.100.10/32"}}
 
 		authorized, err := authorize.Authorize(routes, nil)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(authorized).To(BeEmpty())
+		Expect(authorized).To(HaveLen(1))
+		Expect(authorized[0].Rejected).To(BeTrue())
 	})
 
 	It("returns an error for a route with an unparseable prefix", func() {
