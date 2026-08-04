@@ -14,7 +14,11 @@ spec:
     singular: bgppeerconfig
   scope: Cluster
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.mode
+      name: Mode
+      type: string
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: BGPPeerConfig is the Schema for the bgppeerconfigs API
@@ -39,25 +43,164 @@ spec:
           spec:
             description: spec defines the desired state of BGPPeerConfig
             properties:
-              foo:
-                description: foo is an example field of BGPPeerConfig. Edit bgppeerconfig_types.go
-                  to remove/update
+              clusterBindings:
+                description: |-
+                  clusterBindings is the trust boundary: a peer may only originate
+                  prefixes bound to it here. Enforced in-controller, independent of
+                  any router-side prefix-list — the origin cluster is identified by
+                  which binding's allowedPrefixes contains the route, never by which
+                  peer advertised it (through a route reflector, the advertising peer
+                  is always the RR).
+                items:
+                  description: |-
+                    ClusterBinding binds a range of prefixes to the cluster authorized to
+                    originate them, and the locality that cluster lives in. This is the
+                    security boundary the Authorize pipeline stage enforces.
+                  properties:
+                    allowedPrefixes:
+                      description: |-
+                        allowedPrefixes are the only prefixes this cluster may originate.
+                        Routes outside every binding's allowedPrefixes are dropped, not
+                        attributed to any cluster.
+                      items:
+                        type: string
+                      minItems: 1
+                      type: array
+                    clusterID:
+                      type: string
+                    locality:
+                      description: Locality describes where a cluster in a ClusterBinding
+                        lives.
+                      properties:
+                        region:
+                          type: string
+                        zone:
+                          type: string
+                      required:
+                      - region
+                      - zone
+                      type: object
+                    maxPrefixes:
+                      description: maxPrefixes tears down the session if the peer
+                        exceeds it.
+                      format: int32
+                      type: integer
+                  required:
+                  - allowedPrefixes
+                  - clusterID
+                  - locality
+                  type: object
+                type: array
+              listenPort:
+                default: 179
+                description: listenPort is the port the controller listens for BGP
+                  sessions on.
+                format: int32
+                type: integer
+              localASN:
+                description: |-
+                  localASN is the controller's own ASN. Use the 4-byte private range
+                  (4200000000-4294967294); the 2-byte private range is too small.
+                  int64 because 4-byte ASNs overflow int32, the only signed integer
+                  format OpenAPI schemas natively support below it.
+                format: int64
+                maximum: 4294967295
+                minimum: 0
+                type: integer
+              mode:
+                default: RouteReflectorClient
+                description: mode selects how the controller acquires routing state.
+                enum:
+                - RouteReflectorClient
+                - Passive
+                - BMPCollector
                 type: string
+              peers:
+                description: peers are the BGP sessions the controller establishes.
+                items:
+                  description: BGPPeer is one BGP session the controller establishes.
+                  properties:
+                    address:
+                      type: string
+                    auth:
+                      description: BGPPeerAuth configures authentication for a BGP
+                        session.
+                      properties:
+                        tcpMD5SecretRef:
+                          description: |-
+                            tcpMD5SecretRef points at the key within a Secret, in the same
+                            namespace, holding the TCP MD5 password.
+                          properties:
+                            key:
+                              description: The key of the secret to select from.  Must
+                                be a valid secret key.
+                              type: string
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                            optional:
+                              description: Specify whether the Secret or its key must
+                                be defined
+                              type: boolean
+                          required:
+                          - key
+                          type: object
+                          x-kubernetes-map-type: atomic
+                      type: object
+                    gracefulRestart:
+                      description: GracefulRestartConfig configures BGP graceful restart
+                        for a session.
+                      properties:
+                        enabled:
+                          type: boolean
+                        staleRoutesTime:
+                          description: |-
+                            staleRoutesTime bounds how long routes are held after a restart
+                            before being treated as withdrawn.
+                          type: string
+                      type: object
+                    name:
+                      type: string
+                    remoteASN:
+                      description: remoteASN is the peer's ASN.
+                      format: int64
+                      maximum: 4294967295
+                      minimum: 0
+                      type: integer
+                    timers:
+                      description: BGPTimers configures BGP session timers.
+                      properties:
+                        hold:
+                          type: string
+                        keepalive:
+                          type: string
+                      type: object
+                  required:
+                  - address
+                  - name
+                  - remoteASN
+                  type: object
+                type: array
+              routerID:
+                description: routerID is the controller's BGP router ID.
+                type: string
+            required:
+            - localASN
+            - routerID
             type: object
           status:
             description: status defines the observed state of BGPPeerConfig
             properties:
               conditions:
                 description: |-
-                  conditions represent the current state of the BGPPeerConfig resource.
-                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
-
-                  Standard condition types include:
-                  - "Available": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
-
-                  The status of each condition is one of True, False, or Unknown.
+                  conditions represent the current state of the BGPPeerConfig
+                  resource.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -116,6 +259,41 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              peers:
+                items:
+                  description: PeerStatus is the observed state of one BGP session.
+                  properties:
+                    name:
+                      type: string
+                    prefixesAccepted:
+                      format: int32
+                      type: integer
+                    prefixesReceived:
+                      format: int32
+                      type: integer
+                    prefixesRejected:
+                      description: |-
+                        prefixesRejected is the count of routes dropped by Authorize; see
+                        AdvertisedBackend for per-route reasons.
+                      format: int32
+                      type: integer
+                    sessionState:
+                      description: PeerSessionState mirrors the BGP FSM, simplified
+                        to what operators need.
+                      enum:
+                      - Idle
+                      - Connect
+                      - Active
+                      - OpenSent
+                      - OpenConfirm
+                      - Established
+                      type: string
+                    uptime:
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
             type: object
         required:
         - spec

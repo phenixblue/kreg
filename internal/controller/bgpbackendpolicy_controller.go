@@ -33,19 +33,10 @@ import (
 )
 
 // SnapshotSource provides the settled BackendCandidate snapshot the
-// reconciler renders against. Build-order step 2 (GoBGP ingest) replaces
-// the static stub this package defaults to with a real implementation
-// backed by a live RIB; nothing else about the reconciler changes.
+// reconciler renders against. internal/snapshot.Source is the real
+// implementation, chaining Ingest -> Authorize -> Normalize.
 type SnapshotSource interface {
 	Snapshot(ctx context.Context) ([]pipeline.BackendCandidate, error)
-}
-
-// staticSnapshotSource is the step-1 stand-in: no BGP ingest exists yet,
-// so every policy reconciles against an empty settled snapshot.
-type staticSnapshotSource struct{}
-
-func (staticSnapshotSource) Snapshot(context.Context) ([]pipeline.BackendCandidate, error) {
-	return nil, nil
 }
 
 // BGPBackendPolicyReconciler reconciles a BGPBackendPolicy object
@@ -53,10 +44,15 @@ type BGPBackendPolicyReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 
-	// Snapshot and Driver default to the step-1 stand-ins (no candidates,
-	// the Istio driver) in SetupWithManager when unset.
+	// Snapshot is required — unlike Driver, there's no meaningful
+	// zero-value stand-in for real BGP data, so it isn't defaulted in
+	// SetupWithManager. Construct one *internal/snapshot.Source per
+	// controller process (cmd/main.go), sharing the same *ingest.Manager
+	// as BGPPeerConfigReconciler.
 	Snapshot SnapshotSource
-	Driver   reconcile.Driver
+
+	// Driver defaults to the Istio driver in SetupWithManager when unset.
+	Driver reconcile.Driver
 }
 
 // +kubebuilder:rbac:groups=kreg.twr.dev,resources=bgpbackendpolicies,verbs=get;list;watch;create;update;patch;delete
@@ -135,9 +131,6 @@ func (r *BGPBackendPolicyReconciler) applyOwned(ctx context.Context, policyName 
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *BGPBackendPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if r.Snapshot == nil {
-		r.Snapshot = staticSnapshotSource{}
-	}
 	if r.Driver == nil {
 		r.Driver = istiodriver.Driver{}
 	}

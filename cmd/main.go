@@ -38,6 +38,8 @@ import (
 
 	kregv1alpha1 "github.com/phenixblue/kreg/api/v1alpha1"
 	"github.com/phenixblue/kreg/internal/controller"
+	"github.com/phenixblue/kreg/internal/ingest"
+	"github.com/phenixblue/kreg/internal/snapshot"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -182,9 +184,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	// One shared ingest.Manager per process: BGPPeerConfigReconciler
+	// converges its live peers to spec, and the BGPBackendPolicy
+	// snapshot source reads its RIB. Serve runs the BGP event loop for
+	// the lifetime of the process.
+	ingestManager := ingest.NewManager()
+	go ingestManager.Serve()
+
 	if err := (&controller.BGPPeerConfigReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:  mgr.GetClient(),
+		Scheme:  mgr.GetScheme(),
+		Manager: ingestManager,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "bgppeerconfig")
 		os.Exit(1)
@@ -192,6 +202,10 @@ func main() {
 	if err := (&controller.BGPBackendPolicyReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
+		Snapshot: &snapshot.Source{
+			Client: mgr.GetClient(),
+			RIB:    ingestManager,
+		},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "bgpbackendpolicy")
 		os.Exit(1)
