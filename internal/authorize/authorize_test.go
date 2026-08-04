@@ -85,6 +85,23 @@ var _ = Describe("Authorize", func() {
 		Expect(authorized[0].ClusterID).To(BeEmpty())
 	})
 
+	It("clears a peer-asserted ClusterID and Locality on a rejected route", func() {
+		// A rejected route must not leak untrusted attribution downstream
+		// into AdvertisedBackend reporting (e.g. a stale ClusterID
+		// producing a misleading object name instead of "unattributed").
+		routes := []pipeline.RIBRoute{{
+			Prefix:    "203.0.113.5/32",
+			ClusterID: atl1,
+			Locality:  pipeline.Locality{Region: usEast, Zone: usEastAtlA},
+		}}
+
+		authorized, err := authorize.Authorize(routes, docBindings())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(authorized[0].Rejected).To(BeTrue())
+		Expect(authorized[0].ClusterID).To(BeEmpty())
+		Expect(authorized[0].Locality).To(Equal(pipeline.Locality{}))
+	})
+
 	It("ignores a peer-asserted ClusterID and re-derives it from prefix position", func() {
 		// A route that (however it happened) already carries a ClusterID
 		// from ingest must not be trusted — only allowedPrefixes decides.

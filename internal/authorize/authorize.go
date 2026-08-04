@@ -51,6 +51,8 @@ func Authorize(routes []pipeline.RIBRoute, bindings []kregv1alpha1.ClusterBindin
 		if binding == nil {
 			route.Rejected = true
 			route.Reason = fmt.Sprintf("prefix %s not in allowedPrefixes for any cluster", route.Prefix)
+			route.ClusterID = ""
+			route.Locality = pipeline.Locality{}
 			authorized = append(authorized, route)
 			continue
 		}

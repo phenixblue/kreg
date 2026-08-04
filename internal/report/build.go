@@ -21,6 +21,7 @@ package report
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -93,6 +94,11 @@ func stateAndReason(c pipeline.BackendCandidate) (kregv1alpha1.BackendState, str
 // is a best-effort debuggability surface, not the source of truth for
 // routing decisions — that's Render's job, which already surfaces the
 // same errors properly.
+//
+// Both results are sorted before returning: policies comes from a
+// Kubernetes List, whose ordering isn't guaranteed across calls, and an
+// unstable order here would otherwise make AdvertisedBackend status flap
+// (bumping LastChange) even when the underlying bindings haven't changed.
 func bindings(c pipeline.BackendCandidate, policies []kregv1alpha1.BGPBackendPolicy) ([]string, []string) {
 	if c.Rejected {
 		return nil, nil
@@ -109,6 +115,8 @@ func bindings(c pipeline.BackendCandidate, policies []kregv1alpha1.BGPBackendPol
 		generatedResources = append(generatedResources,
 			fmt.Sprintf("EndpointSlice/%s/%s", policy.Namespace, reconcile.EndpointSliceName(serviceName, c.ClusterID)))
 	}
+	slices.Sort(boundPolicies)
+	slices.Sort(generatedResources)
 	return boundPolicies, generatedResources
 }
 
