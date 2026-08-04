@@ -96,7 +96,7 @@ func docPolicy() *kregv1alpha1.BGPBackendPolicy {
 }
 
 // docCandidate mirrors the AdvertisedBackend worked example (atl-1) in
-// docs/design/architecture.md §2.4.
+// docs/design/architecture.md §2.5.
 func docCandidate() pipeline.BackendCandidate {
 	serviceTag := int32(80)
 	return pipeline.BackendCandidate{

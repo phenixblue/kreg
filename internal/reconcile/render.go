@@ -163,7 +163,7 @@ func SanitizeForName(prefix string) string {
 // in that case, and an empty name segment isn't a usable object name.
 const unattributedClusterID = "unattributed"
 
-// BackendObjectName matches docs/design/architecture.md §2.4's
+// BackendObjectName matches docs/design/architecture.md §2.5's
 // convention: "198.51.100.10/32" + "atl-1" -> "198-51-100-10-32-atl-1".
 // It's the AdvertisedBackend object name for a given prefix+clusterID —
 // exported so internal/damp can key cross-tick state by the same name

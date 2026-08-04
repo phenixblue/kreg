@@ -23,7 +23,7 @@ import (
 
 // AdvertisedBackendSpec is empty: AdvertisedBackend is entirely
 // controller-written, the materialized view of the RIB — there is no
-// user-configurable desired state. See docs/design/architecture.md §2.4.
+// user-configurable desired state. See docs/design/architecture.md §2.5.
 type AdvertisedBackendSpec struct{}
 
 // BackendAttributes are the semantic attributes decoded from a route's
