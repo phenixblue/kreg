@@ -17,6 +17,7 @@ limitations under the License.
 package report_test
 
 import (
+	"math"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -140,6 +141,18 @@ var _ = Describe("BuildAdvertisedBackends", func() {
 		Expect(stability.WithdrawnAt).To(gstruct.PointTo(Equal(metav1.NewTime(withdrawnAt))))
 		Expect(stability.SuppressedSince).To(BeNil())
 		Expect(stability.PendingSince).To(BeNil())
+	})
+
+	It("clamps an out-of-int32-range score instead of overflowing on cast", func() {
+		candidate := docCandidate()
+		candidate.Damping = &pipeline.DampingInfo{
+			State:          kregv1alpha1.BackendStateDampened,
+			Score:          math.MaxInt32 * 1000, // wildly beyond int32 range
+			LastObservedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		}
+
+		backends := report.BuildAdvertisedBackends([]pipeline.BackendCandidate{candidate}, nil)
+		Expect(backends[0].Status.Stability.DampeningPenalty).To(Equal(int32(math.MaxInt32)))
 	})
 
 	It("leaves Damping-derived status fields zero when Damping is nil", func() {

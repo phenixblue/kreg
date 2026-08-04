@@ -81,7 +81,7 @@ func buildOne(c pipeline.BackendCandidate, policies []kregv1alpha1.BGPBackendPol
 	if c.Damping != nil {
 		status.Stability = kregv1alpha1.StabilityStatus{
 			FlapCount24h:     c.Damping.FlapCount24h,
-			DampeningPenalty: int32(math.Round(c.Damping.Score)),
+			DampeningPenalty: clampToInt32(c.Damping.Score),
 			LastObservedAt:   metaTime(c.Damping.LastObservedAt),
 			WithdrawnAt:      metaTimeOrNil(c.Damping.WithdrawnAt),
 			SuppressedSince:  metaTimeOrNil(c.Damping.SuppressedSince),
@@ -111,6 +111,25 @@ func metaTimeOrNil(t *time.Time) *metav1.Time {
 		return nil
 	}
 	return metaTime(*t)
+}
+
+// clampToInt32 rounds and clamps a damping score into int32's range
+// before it's persisted as DampeningPenalty. Go's float->int conversion
+// is implementation-specific once the value is out of the target type's
+// range — a corrupted penalty would then feed back into the next tick's
+// Score via PriorStateFromAdvertisedBackends, so this must never
+// silently wrap or produce garbage, however unlikely an actual overflow
+// is given maxSuppress already forces a periodic reset.
+func clampToInt32(f float64) int32 {
+	rounded := math.Round(f)
+	switch {
+	case rounded > math.MaxInt32:
+		return math.MaxInt32
+	case rounded < math.MinInt32:
+		return math.MinInt32
+	default:
+		return int32(rounded)
+	}
 }
 
 // stateAndReason applies precedence: Rejected (Authorize/CommunityMap)

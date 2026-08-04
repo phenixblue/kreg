@@ -193,15 +193,32 @@ func evaluateAbsent(now time.Time, p damp.PriorState, withdrawalGrace time.Durat
 	}
 
 	elapsed := now.Sub(prev.LastObservedAt)
+	score := decayScore(prev.Score, elapsed, halfLifeOf(dampening))
+	flapCount := decayFlapCount(prev.FlapCount24h, elapsed)
+
+	// A backend that was suppressed before it disappeared must stay
+	// Dampened for as long as suppressionState says so (same hysteresis
+	// and maxSuppress cap as the present-tick path) -- reconcile.Select
+	// only excludes Dampened/Pending, not HoldDown, so falling back to
+	// HoldDown here would re-select an actively-flapping backend for the
+	// whole withdrawalGrace window on every withdraw, oscillating it back
+	// into service and defeating the suppression that's the entire point
+	// of this stage.
+	state, reason, score, suppressedSince := suppressionState(now, score, prev.SuppressedSince, dampening)
+	if state != kregv1alpha1.BackendStateDampened {
+		state = kregv1alpha1.BackendStateHoldDown
+		reason = fmt.Sprintf("withdrawn %s ago, grace %s", now.Sub(*withdrawnAt).Round(time.Second), withdrawalGrace)
+	}
+
 	synthesized := p.Candidate
 	synthesized.Damping = &pipeline.DampingInfo{
-		State:           kregv1alpha1.BackendStateHoldDown,
-		Reason:          fmt.Sprintf("withdrawn %s ago, grace %s", now.Sub(*withdrawnAt).Round(time.Second), withdrawalGrace),
-		Score:           decayScore(prev.Score, elapsed, halfLifeOf(dampening)),
-		FlapCount24h:    decayFlapCount(prev.FlapCount24h, elapsed),
+		State:           state,
+		Reason:          reason,
+		Score:           score,
+		FlapCount24h:    flapCount,
 		LastObservedAt:  now,
 		WithdrawnAt:     withdrawnAt,
-		SuppressedSince: prev.SuppressedSince,
+		SuppressedSince: suppressedSince,
 	}
 	return &synthesized
 }

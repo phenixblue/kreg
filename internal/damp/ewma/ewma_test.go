@@ -152,6 +152,57 @@ var _ = Describe("Damper.Evaluate", func() {
 		Expect(last.Damping.SuppressedSince).NotTo(BeNil())
 	})
 
+	It("keeps a suppressed candidate Dampened, not HoldDown, while it's withdrawn", func() {
+		// reconcile.Select only excludes Dampened/Pending, not HoldDown --
+		// falling back to HoldDown on withdrawal would re-select an
+		// actively-flapping backend for the whole grace window on every
+		// withdraw/announce cycle, defeating suppression entirely.
+		cfg := baseConfig()
+		c := testCandidate()
+		suppressedSince := t0
+		prior := map[string]damp.PriorState{
+			key(c): {
+				Candidate: c,
+				Damping: pipeline.DampingInfo{
+					State:           kregv1alpha1.BackendStateDampened,
+					Score:           4000,
+					LastObservedAt:  t0,
+					SuppressedSince: &suppressedSince,
+				},
+			},
+		}
+
+		withdrawn := (ewma.Damper{}).Evaluate(t0.Add(2*time.Second), nil, prior, cfg)
+		Expect(withdrawn).To(HaveLen(1))
+		Expect(withdrawn[0].Damping.State).To(Equal(kregv1alpha1.BackendStateDampened))
+		Expect(withdrawn[0].Damping.SuppressedSince).NotTo(BeNil())
+	})
+
+	It("stops holding down a withdrawn candidate once maxSuppress caps it out while absent", func() {
+		cfg := baseConfig()
+		cfg.Dampening.MaxSuppress = &metav1.Duration{Duration: 5 * time.Second}
+		cfg.Dampening.HalfLife = &metav1.Duration{Duration: 5 * time.Minute}
+		c := testCandidate()
+		suppressedSince := t0
+		prior := map[string]damp.PriorState{
+			key(c): {
+				Candidate: c,
+				Damping: pipeline.DampingInfo{
+					State:           kregv1alpha1.BackendStateDampened,
+					Score:           10000,
+					LastObservedAt:  t0,
+					SuppressedSince: &suppressedSince,
+				},
+			},
+		}
+
+		withdrawn := (ewma.Damper{}).Evaluate(t0.Add(6*time.Second), nil, prior, cfg)
+		Expect(withdrawn).To(HaveLen(1))
+		Expect(withdrawn[0].Damping.State).To(Equal(kregv1alpha1.BackendStateHoldDown))
+		Expect(withdrawn[0].Damping.Score).To(Equal(float64(0)))
+		Expect(withdrawn[0].Damping.SuppressedSince).To(BeNil())
+	})
+
 	It("returns a suppressed candidate to Active once its score decays below reuseThreshold", func() {
 		cfg := baseConfig()
 		c := testCandidate()
