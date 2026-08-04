@@ -195,9 +195,9 @@ spec:
     port: 8443
     appProtocol: https
     tls:
-      mode: SIMPLE                  # gateway → cluster hop
+      mode: SIMPLE                  # SIMPLE (v1 default) | Passthrough | Mutual
       sni: prod-web.internal
-      credentialRef: {name: upstream-ca}
+      credentialRef: {name: upstream-ca}   # CA bundle; unused in Passthrough mode
 
   loadBalancing:
     strategy: Locality              # | Weighted | Uniform
@@ -235,6 +235,17 @@ status:
     - Service/gateways/prod-web-kreg
     - DestinationRule/gateways/prod-web-kreg
 ```
+
+**`backend.tls.mode` roadmap.** `SIMPLE` is the v1 default: the reconciler
+attaches a `BackendTLSPolicy` validating the backend's server cert against
+`credentialRef`, no client cert asserted. `Passthrough` is the fast-follow —
+the reconciler emits a `TLSRoute` (SNI-routed, un-terminated) instead of
+`HTTPRoute` + `Service`, so the gateway never holds key material for that
+backend at all; the tradeoff is losing HTTP-level routing and
+`outlierDetection.consecutive5xx` for that policy, so it's opt-in per
+`BGPBackendPolicy`, not a global switch. `Mutual` — the gateway also asserts
+a client cert, verified by the backend — is deferred until a real
+regulatory-boundary deployment justifies the added PKI.
 
 ### 2.4 `AdvertisedBackend` — cluster-scoped, controller-written, read-only
 
@@ -557,11 +568,14 @@ If you don't already have a colo footprint, this shapes your v1 hosting:
    mileage — implements the same `BGPBackendPolicy` lowering against
    `BackendTrafficPolicy`/`ClientTrafficPolicy` instead of `DestinationRule`.
    Not v1.
+8. **`backend.tls.mode: Passthrough`**, once `SIMPLE` has real usage —
+   `TLSRoute` output path for backends that want zero shared cert material
+   with the ingress tier. **`Mutual`** comes later still, once a deployment's
+   trust-boundary requirements actually demand it.
 
 ## 8. Open questions worth deciding early
 
-- **Where do TLS certs for the gateway→cluster hop come from?** Not in scope
-  above, but it's the first thing anyone will ask in a security review.
-  `BackendTLSPolicy` (Gateway API standard channel) is the likely portable
-  answer, worth confirming against both the Istio and future Envoy Gateway
-  drivers before committing.
+None currently open. The decisions above (API group, backend identity vs.
+traffic policy, `serviceTag`, route origination, backend TLS roadmap)
+reflect what's chosen; revisit this section as implementation surfaces new
+tradeoffs.
