@@ -21,38 +21,120 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+// CommunityField is a BackendCandidate field a CommunityRule can set.
+// +kubebuilder:validation:Enum=weight;tier;drain;serviceTag
+type CommunityField string
+
+const (
+	CommunityFieldWeight     CommunityField = "weight"
+	CommunityFieldTier       CommunityField = "tier"
+	CommunityFieldDrain      CommunityField = "drain"
+	CommunityFieldServiceTag CommunityField = "serviceTag"
+)
+
+// UnmappedCommunityPolicy controls what happens when a route's large
+// communities don't match any CommunityMap rule at all.
+// +kubebuilder:validation:Enum=Ignore;Reject;Warn
+type UnmappedCommunityPolicy string
+
+const (
+	// UnmappedCommunityIgnore proceeds with fallback/default values.
+	UnmappedCommunityIgnore UnmappedCommunityPolicy = "Ignore"
+	// UnmappedCommunityReject excludes the route from the settled snapshot.
+	UnmappedCommunityReject UnmappedCommunityPolicy = "Reject"
+	// UnmappedCommunityWarn proceeds like Ignore but flags the candidate for
+	// visibility (e.g. via AdvertisedBackend.status.reason).
+	UnmappedCommunityWarn UnmappedCommunityPolicy = "Warn"
+)
+
+// CommunityMatch matches a BGP large community. LargeCommunity is a
+// "<globalAdmin>:<function>:<value>" pattern; the value segment may be "*"
+// to match any value and capture it for FromCommunityValue.
+type CommunityMatch struct {
+	// +required
+	LargeCommunity string `json:"largeCommunity"`
+}
+
+// CommunityFieldSet sets one BackendCandidate field when a CommunityRule
+// matches.
+type CommunityFieldSet struct {
+	// field is the BackendCandidate field this rule sets.
+	// +required
+	Field CommunityField `json:"field"`
+
+	// value is a literal to set the field to.
+	// +optional
+	Value *string `json:"value,omitempty"`
+
+	// fromCommunityValue sets the field from the community's captured value
+	// segment. Only valid when the match pattern's value segment is "*".
+	// +optional
+	FromCommunityValue bool `json:"fromCommunityValue,omitempty"`
+}
+
+// CommunityRule decodes one BGP large community pattern into a
+// BackendCandidate field.
+type CommunityRule struct {
+	// +required
+	Match CommunityMatch `json:"match"`
+
+	// +required
+	Set CommunityFieldSet `json:"set"`
+}
+
+// WeightFallbackSource selects the BGP attribute used to derive weight when
+// no rule sets it.
+// +kubebuilder:validation:Enum=MED
+type WeightFallbackSource string
+
+const WeightFallbackFromMED WeightFallbackSource = "MED"
+
+// PreferenceFallbackSource selects the BGP attribute used to derive
+// preference when no rule sets it.
+// +kubebuilder:validation:Enum=ASPathLength
+type PreferenceFallbackSource string
+
+const PreferenceFallbackFromASPathLength PreferenceFallbackSource = "ASPathLength"
+
+// CommunityFallbacks are used when no rule matches a candidate's
+// communities.
+type CommunityFallbacks struct {
+	// weightFrom derives weight from a BGP attribute when no rule sets it.
+	// MED is inverted: lower MED means higher weight.
+	// +optional
+	WeightFrom WeightFallbackSource `json:"weightFrom,omitempty"`
+
+	// +optional
+	PreferenceFrom PreferenceFallbackSource `json:"preferenceFrom,omitempty"`
+
+	// +kubebuilder:default=100
+	// +optional
+	DefaultWeight int32 `json:"defaultWeight,omitempty"`
+}
 
 // CommunityMapSpec defines the desired state of CommunityMap
 type CommunityMapSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
-
-	// foo is an example field of CommunityMap. Edit communitymap_types.go to remove/update
+	// rules decode BGP large communities into BackendCandidate fields, in
+	// order. Multiple rules may match a single route, each setting a
+	// different field.
 	// +optional
-	Foo *string `json:"foo,omitempty"`
+	Rules []CommunityRule `json:"rules,omitempty"`
+
+	// fallbacks are used when none of rules match a candidate's
+	// communities at all.
+	// +optional
+	Fallbacks *CommunityFallbacks `json:"fallbacks,omitempty"`
+
+	// onUnmappedCommunity controls what happens when a route's large
+	// communities don't match any rule.
+	// +kubebuilder:default=Ignore
+	// +optional
+	OnUnmappedCommunity UnmappedCommunityPolicy `json:"onUnmappedCommunity,omitempty"`
 }
 
 // CommunityMapStatus defines the observed state of CommunityMap.
 type CommunityMapStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
-
 	// conditions represent the current state of the CommunityMap resource.
-	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
-	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
-	//
-	// The status of each condition is one of True, False, or Unknown.
 	// +listType=map
 	// +listMapKey=type
 	// +optional

@@ -14,7 +14,14 @@ spec:
     singular: bgpbackendpolicy
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.activeBackends
+      name: Active
+      type: integer
+    - jsonPath: .status.suppressedBackends
+      name: Suppressed
+      type: integer
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: BGPBackendPolicy is the Schema for the bgpbackendpolicies API
@@ -39,25 +46,234 @@ spec:
           spec:
             description: spec defines the desired state of BGPBackendPolicy
             properties:
-              foo:
-                description: foo is an example field of BGPBackendPolicy. Edit bgpbackendpolicy_types.go
-                  to remove/update
-                type: string
+              activeHealth:
+                description: |-
+                  activeHealth configures HTTP-level health checking of selected
+                  backends. BGP is reachability, not application health; both are
+                  required before traffic is trusted with production traffic.
+                properties:
+                  healthyThreshold:
+                    format: int32
+                    type: integer
+                  interval:
+                    type: string
+                  path:
+                    type: string
+                  timeout:
+                    type: string
+                  unhealthyThreshold:
+                    format: int32
+                    type: integer
+                required:
+                - path
+                type: object
+              backend:
+                description: backend describes the port and TLS posture for the selected
+                  backends.
+                properties:
+                  appProtocol:
+                    description: |-
+                      appProtocol identifies the application protocol spoken by the
+                      backend, e.g. "https".
+                    type: string
+                  port:
+                    description: port is the backend port traffic is forwarded to.
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  tls:
+                    description: tls configures the gateway -> cluster hop.
+                    properties:
+                      credentialRef:
+                        description: |-
+                          credentialRef points at the CA bundle used to validate the backend's
+                          server certificate. Unused when mode is Passthrough.
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      mode:
+                        default: SIMPLE
+                        description: mode selects the TLS posture for this hop.
+                        enum:
+                        - SIMPLE
+                        - Passthrough
+                        - Mutual
+                        type: string
+                      sni:
+                        description: |-
+                          sni is the hostname presented during the TLS handshake and, in SIMPLE
+                          mode, validated against the backend's server certificate.
+                        type: string
+                    required:
+                    - sni
+                    type: object
+                required:
+                - port
+                - tls
+                type: object
+              loadBalancing:
+                description: |-
+                  loadBalancing controls how traffic is distributed across selected
+                  backends.
+                properties:
+                  locality:
+                    description: LocalityLoadBalancingConfig configures locality-aware
+                      failover.
+                    properties:
+                      failoverThreshold:
+                        description: |-
+                          failoverThreshold is the percent of local capacity that must be
+                          healthy before traffic spills to the next locality in preference.
+                        format: int32
+                        maximum: 100
+                        minimum: 0
+                        type: integer
+                      preference:
+                        description: preference is the ordered locality failover chain.
+                        items:
+                          type: string
+                        type: array
+                    type: object
+                  strategy:
+                    default: Locality
+                    description: |-
+                      LoadBalancingStrategy selects how traffic is spread across selected
+                      backends.
+                    enum:
+                    - Locality
+                    - Weighted
+                    - Uniform
+                    type: string
+                type: object
+              outlierDetection:
+                description: |-
+                  outlierDetection configures passive ejection of unhealthy backends
+                  based on observed traffic.
+                properties:
+                  baseEjectionTime:
+                    type: string
+                  consecutive5xx:
+                    description: |-
+                      consecutive5xx is the number of consecutive 5xx responses before a
+                      backend is ejected.
+                    format: int32
+                    type: integer
+                  maxEjectionPercent:
+                    format: int32
+                    maximum: 100
+                    minimum: 0
+                    type: integer
+                type: object
+              selector:
+                description: selector picks which advertised routes feed this target.
+                properties:
+                  clusterIDs:
+                    description: |-
+                      clusterIDs restricts selection to these origin clusters. Empty means
+                      all clusters authorized via BGPPeerConfig.clusterBindings.
+                    items:
+                      type: string
+                    type: array
+                  prefixes:
+                    description: prefixes restricts selection to advertised routes
+                      within these CIDRs.
+                    items:
+                      type: string
+                    type: array
+                  serviceTag:
+                    description: |-
+                      serviceTag restricts selection to routes a CommunityMap rule decoded
+                      with this serviceTag.
+                    format: int32
+                    type: integer
+                type: object
+              stability:
+                description: |-
+                  stability controls how route churn is smoothed before it reaches
+                  Gateway API config.
+                properties:
+                  additionDelay:
+                    description: |-
+                      additionDelay is how long a newly-advertised route must be settled
+                      before it's added as a backend.
+                    type: string
+                  dampening:
+                    description: DampeningConfig configures RFC 2439-style flap dampening.
+                    properties:
+                      enabled:
+                        type: boolean
+                      halfLife:
+                        type: string
+                      maxSuppress:
+                        type: string
+                      reuseThreshold:
+                        format: int32
+                        type: integer
+                      suppressThreshold:
+                        format: int32
+                        type: integer
+                    type: object
+                  withdrawalGrace:
+                    description: |-
+                      withdrawalGrace is the hold-down before removing a backend that
+                      stopped being advertised.
+                    type: string
+                type: object
+              targetRef:
+                description: targetRef identifies the Gateway or HTTPRoute this policy
+                  attaches to.
+                properties:
+                  group:
+                    description: Group is the group of the target resource.
+                    maxLength: 253
+                    pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                    type: string
+                  kind:
+                    description: Kind is kind of the target resource.
+                    maxLength: 63
+                    minLength: 1
+                    pattern: ^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$
+                    type: string
+                  name:
+                    description: Name is the name of the target resource.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                required:
+                - group
+                - kind
+                - name
+                type: object
+            required:
+            - backend
+            - selector
+            - targetRef
             type: object
           status:
             description: status defines the observed state of BGPBackendPolicy
             properties:
+              activeBackends:
+                description: |-
+                  activeBackends is the count of selected backends currently in the
+                  Active state.
+                format: int32
+                type: integer
               conditions:
                 description: |-
-                  conditions represent the current state of the BGPBackendPolicy resource.
-                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
-
-                  Standard condition types include:
-                  - "Available": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
-
-                  The status of each condition is one of True, False, or Unknown.
+                  conditions represent the current state of the BGPBackendPolicy
+                  resource. Standard condition types include "Accepted" (the policy is
+                  well-formed and attached) and "Programmed" (the generated resources
+                  have been written).
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -116,6 +332,19 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              generated:
+                description: |-
+                  generated lists the resources this policy produced, as
+                  "Kind/namespace/name".
+                items:
+                  type: string
+                type: array
+              suppressedBackends:
+                description: |-
+                  suppressedBackends is the count of selected backends currently
+                  dampened.
+                format: int32
+                type: integer
             type: object
         required:
         - spec

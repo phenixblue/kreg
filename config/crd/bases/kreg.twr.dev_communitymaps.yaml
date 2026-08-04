@@ -39,25 +39,98 @@ spec:
           spec:
             description: spec defines the desired state of CommunityMap
             properties:
-              foo:
-                description: foo is an example field of CommunityMap. Edit communitymap_types.go
-                  to remove/update
+              fallbacks:
+                description: |-
+                  fallbacks are used when none of rules match a candidate's
+                  communities at all.
+                properties:
+                  defaultWeight:
+                    default: 100
+                    format: int32
+                    type: integer
+                  preferenceFrom:
+                    description: |-
+                      PreferenceFallbackSource selects the BGP attribute used to derive
+                      preference when no rule sets it.
+                    enum:
+                    - ASPathLength
+                    type: string
+                  weightFrom:
+                    description: |-
+                      weightFrom derives weight from a BGP attribute when no rule sets it.
+                      MED is inverted: lower MED means higher weight.
+                    enum:
+                    - MED
+                    type: string
+                type: object
+              onUnmappedCommunity:
+                default: Ignore
+                description: |-
+                  onUnmappedCommunity controls what happens when a route's large
+                  communities don't match any rule.
+                enum:
+                - Ignore
+                - Reject
+                - Warn
                 type: string
+              rules:
+                description: |-
+                  rules decode BGP large communities into BackendCandidate fields, in
+                  order. Multiple rules may match a single route, each setting a
+                  different field.
+                items:
+                  description: |-
+                    CommunityRule decodes one BGP large community pattern into a
+                    BackendCandidate field.
+                  properties:
+                    match:
+                      description: |-
+                        CommunityMatch matches a BGP large community. LargeCommunity is a
+                        "<globalAdmin>:<function>:<value>" pattern; the value segment may be "*"
+                        to match any value and capture it for FromCommunityValue.
+                      properties:
+                        largeCommunity:
+                          type: string
+                      required:
+                      - largeCommunity
+                      type: object
+                    set:
+                      description: |-
+                        CommunityFieldSet sets one BackendCandidate field when a CommunityRule
+                        matches.
+                      properties:
+                        field:
+                          description: field is the BackendCandidate field this rule
+                            sets.
+                          enum:
+                          - weight
+                          - tier
+                          - drain
+                          - serviceTag
+                          type: string
+                        fromCommunityValue:
+                          description: |-
+                            fromCommunityValue sets the field from the community's captured value
+                            segment. Only valid when the match pattern's value segment is "*".
+                          type: boolean
+                        value:
+                          description: value is a literal to set the field to.
+                          type: string
+                      required:
+                      - field
+                      type: object
+                  required:
+                  - match
+                  - set
+                  type: object
+                type: array
             type: object
           status:
             description: status defines the observed state of CommunityMap
             properties:
               conditions:
-                description: |-
-                  conditions represent the current state of the CommunityMap resource.
-                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
-
-                  Standard condition types include:
-                  - "Available": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
-
-                  The status of each condition is one of True, False, or Unknown.
+                description: conditions represent the current state of the CommunityMap
+                  resource.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

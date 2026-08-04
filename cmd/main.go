@@ -25,6 +25,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	istioclientv1 "istio.io/client-go/pkg/apis/networking/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -47,6 +48,9 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	// The Istio driver (internal/reconcile/istio) applies DestinationRule
+	// objects; the manager's client needs the type registered to do that.
+	utilruntime.Must(istioclientv1.AddToScheme(scheme))
 
 	utilruntime.Must(kregv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme

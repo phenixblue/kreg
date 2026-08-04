@@ -1,0 +1,23 @@
+addressType: IPv4
+apiVersion: discovery.k8s.io/v1
+endpoints:
+- addresses:
+  - 198.51.100.10
+  conditions:
+    ready: true
+    serving: true
+  hints:
+    forZones:
+    - name: us-east-atl-a
+  zone: us-east-atl-a
+kind: EndpointSlice
+metadata:
+  labels:
+    kreg.twr.dev/managed-by: prod-web
+    kubernetes.io/service-name: prod-web-kreg
+  name: prod-web-kreg-atl-1
+  namespace: gateways
+ports:
+- name: https
+  port: 8443
+  protocol: TCP

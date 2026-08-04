@@ -1,0 +1,26 @@
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  labels:
+    kreg.twr.dev/managed-by: prod-web
+  name: prod-web-kreg
+  namespace: gateways
+spec:
+  host: prod-web-kreg.gateways.svc.cluster.local
+  trafficPolicy:
+    loadBalancer:
+      localityLbSetting:
+        failover:
+        - from: us-east
+          to: us-west
+        - from: us-west
+          to: eu-west
+    outlierDetection:
+      baseEjectionTime: 30s
+      consecutive5xxErrors: 5
+      maxEjectionPercent: 50
+    tls:
+      credentialName: upstream-ca
+      mode: SIMPLE
+      sni: prod-web.internal
+status: {}
