@@ -215,6 +215,28 @@ var _ = Describe("AdvertisedBackend Controller", func() {
 		Expect(backend.Status.Stability.DampeningPenalty).To(Equal(int32(812)))
 	})
 
+	It("treats a Rejected candidate's reason change as semantic, unlike HoldDown/Dampened", func() {
+		// Unlike HoldDown/Dampened, Rejected's reason describes a stable
+		// condition (which allowedPrefixes rule excluded it) that can
+		// genuinely change -- e.g. a clusterBindings edit -- while the
+		// candidate stays Rejected throughout, and that's a real change
+		// an operator needs reflected. Tested directly against
+		// statusChanged rather than through a full Reconcile round-trip:
+		// LastChange is stamped from metav1.Now(), which truncates to
+		// whole seconds, so two reconciles issued back-to-back in a test
+		// can't reliably observe it change without an added sleep --
+		// statusChanged's own decision is what's under test here.
+		old := kregv1alpha1.AdvertisedBackendStatus{
+			Prefix: "203.0.113.5/32",
+			State:  kregv1alpha1.BackendStateRejected,
+			Reason: "prefix 203.0.113.5/32 not in allowedPrefixes for any cluster",
+		}
+		latest := old
+		latest.Reason = "prefix 203.0.113.5/32 not in allowedPrefixes for cluster atl-3"
+
+		Expect(statusChanged(old, latest)).To(BeTrue())
+	})
+
 	It("never deletes an AdvertisedBackend it didn't create", func() {
 		// pruneStaleBackends must only ever consider objects carrying this
 		// reconciler's own ManagedByLabel — an object of this kind created
