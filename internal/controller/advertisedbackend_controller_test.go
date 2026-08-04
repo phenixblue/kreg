@@ -131,7 +131,7 @@ var _ = Describe("AdvertisedBackend Controller", func() {
 		Expect(apierrors.IsNotFound(err)).To(BeTrue())
 	})
 
-	It("persists a HoldDown candidate's state without bumping LastChange on LastObservedAt alone", func() {
+	It("persists a HoldDown candidate's state without bumping LastChange on LastObservedAt/Reason drift alone", func() {
 		base := time.Now().Truncate(time.Second)
 		withdrawnAt := base.Add(-4 * time.Second)
 		holdDown := pipeline.BackendCandidate{
@@ -159,8 +159,9 @@ var _ = Describe("AdvertisedBackend Controller", func() {
 		Expect(backend.Status.LastChange).NotTo(BeNil())
 		lastChange := backend.Status.LastChange.Time
 
-		By("reconciling again with only LastObservedAt advanced: LastChange doesn't bump")
+		By("reconciling again with LastObservedAt advanced and Reason's elapsed-time text updated: LastChange doesn't bump")
 		holdDown.Damping.LastObservedAt = base.Add(5 * time.Second)
+		holdDown.Damping.Reason = "withdrawn 9s ago, grace 30s" // same State, text alone reflects more elapsed time
 		r.Snapshot = fakeSnapshotSource{candidates: []pipeline.BackendCandidate{holdDown}}
 		_, err = r.Reconcile(ctx, reconcile.Request{})
 		Expect(err).NotTo(HaveOccurred())
@@ -168,6 +169,7 @@ var _ = Describe("AdvertisedBackend Controller", func() {
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: testAtl1BackendName}, &backend)).To(Succeed())
 		Expect(backend.Status.LastChange.Time).To(Equal(lastChange))
 		Expect(backend.Status.Stability.LastObservedAt.Time).To(Equal(holdDown.Damping.LastObservedAt))
+		Expect(backend.Status.Reason).To(Equal(holdDown.Damping.Reason))
 	})
 
 	It("doesn't bump LastChange when only the decaying penalty/flap count drift", func() {

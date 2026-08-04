@@ -127,14 +127,21 @@ func (r *AdvertisedBackendReconciler) applyBackend(ctx context.Context, desired 
 // bumps on every reconcile (Damp re-evaluates every candidate each
 // tick); Stability.DampeningPenalty and .FlapCount24h decay a little on
 // every tick too, even with zero flaps, as long as any residual score
-// hasn't fully decayed to zero. None of the three by itself is a
-// semantic change — only a real transition (State/Reason,
-// WithdrawnAt/SuppressedSince/PendingSince entering or clearing, or
-// anything else) should bump LastChange.
+// hasn't fully decayed to zero. Reason is excluded for the same
+// reason: the Damper's HoldDown/Dampened reasons embed those same
+// continuously-drifting values as free text ("withdrawn 12s ago",
+// "score 2380") to stay informative moment-to-moment, so the exact
+// wording changes on essentially every tick even while State doesn't.
+// State transitioning is the actual semantic signal — Rejected's Reason
+// is static text with no time-varying component, so excluding Reason
+// here doesn't lose that case either, since entering/leaving Rejected
+// already shows up as a State diff. WithdrawnAt/SuppressedSince/
+// PendingSince stay in the comparison: those only change at real
+// transition points.
 func statusChanged(old, latest kregv1alpha1.AdvertisedBackendStatus) bool {
-	old.FirstSeen, old.LastChange = nil, nil
+	old.FirstSeen, old.LastChange, old.Reason = nil, nil, ""
 	old.Stability.LastObservedAt, old.Stability.DampeningPenalty, old.Stability.FlapCount24h = nil, 0, 0
-	latest.FirstSeen, latest.LastChange = nil, nil
+	latest.FirstSeen, latest.LastChange, latest.Reason = nil, nil, ""
 	latest.Stability.LastObservedAt, latest.Stability.DampeningPenalty, latest.Stability.FlapCount24h = nil, 0, 0
 	return !reflect.DeepEqual(old, latest)
 }
