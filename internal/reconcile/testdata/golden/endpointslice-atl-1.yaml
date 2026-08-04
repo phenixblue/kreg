@@ -15,7 +15,7 @@ metadata:
   labels:
     kreg.twr.dev/managed-by: prod-web
     kubernetes.io/service-name: prod-web-kreg
-  name: prod-web-kreg-atl-1
+  name: prod-web-kreg-atl-1-198-51-100-10-32
   namespace: gateways
 ports:
 - name: https

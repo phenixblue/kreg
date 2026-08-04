@@ -33,6 +33,10 @@ import (
 	"github.com/phenixblue/kreg/internal/snapshot"
 )
 
+// atl1Address is the prefix used across these tests as a route inside
+// docPeerConfig's atl-1 allowedPrefixes.
+const atl1Address = "198.51.100.10/32"
+
 // fakeRIB stands in for a real *ingest.Manager, so these tests exercise
 // Source's own orchestration (list bindings, authorize, normalize)
 // without needing a live BGP session.
@@ -81,24 +85,29 @@ var _ = Describe("Source", func() {
 		src := &snapshot.Source{
 			Client: newFakeClient(docPeerConfig(), communityMap),
 			RIB: fakeRIB{routes: []pipeline.RIBRoute{
-				{Prefix: "198.51.100.10/32", LargeCommunities: []string{"4200000000:1:80"}},
-				{Prefix: "203.0.113.5/32"}, // outside every binding -> dropped by Authorize
+				{Prefix: atl1Address, LargeCommunities: []string{"4200000000:1:80"}},
+				{Prefix: "203.0.113.5/32"}, // outside every binding -> kept, flagged Rejected
 			}},
 		}
 
 		candidates, err := src.Snapshot(context.Background())
 		Expect(err).NotTo(HaveOccurred())
-		Expect(candidates).To(HaveLen(1))
-		Expect(candidates[0].Prefix).To(Equal("198.51.100.10/32"))
+		Expect(candidates).To(HaveLen(2))
+		Expect(candidates[0].Prefix).To(Equal(atl1Address))
 		Expect(candidates[0].ClusterID).To(Equal("atl-1"))
 		Expect(candidates[0].Locality).To(Equal(pipeline.Locality{Region: "us-east", Zone: "us-east-atl-a"}))
 		Expect(candidates[0].Weight).To(Equal(int32(80)))
+		Expect(candidates[0].Rejected).To(BeFalse())
+
+		Expect(candidates[1].Prefix).To(Equal("203.0.113.5/32"))
+		Expect(candidates[1].Rejected).To(BeTrue())
+		Expect(candidates[1].Reason).NotTo(BeEmpty())
 	})
 
 	It("proceeds with default weight when no CommunityMap exists yet", func() {
 		src := &snapshot.Source{
 			Client: newFakeClient(docPeerConfig()),
-			RIB:    fakeRIB{routes: []pipeline.RIBRoute{{Prefix: "198.51.100.10/32"}}},
+			RIB:    fakeRIB{routes: []pipeline.RIBRoute{{Prefix: atl1Address}}},
 		}
 
 		candidates, err := src.Snapshot(context.Background())
@@ -107,15 +116,16 @@ var _ = Describe("Source", func() {
 		Expect(candidates[0].Weight).To(Equal(int32(100)))
 	})
 
-	It("drops routes when there are no BGPPeerConfigs at all", func() {
+	It("rejects every route when there are no BGPPeerConfigs at all", func() {
 		src := &snapshot.Source{
 			Client: newFakeClient(),
-			RIB:    fakeRIB{routes: []pipeline.RIBRoute{{Prefix: "198.51.100.10/32"}}},
+			RIB:    fakeRIB{routes: []pipeline.RIBRoute{{Prefix: atl1Address}}},
 		}
 
 		candidates, err := src.Snapshot(context.Background())
 		Expect(err).NotTo(HaveOccurred())
-		Expect(candidates).To(BeEmpty())
+		Expect(candidates).To(HaveLen(1))
+		Expect(candidates[0].Rejected).To(BeTrue())
 	})
 
 	It("propagates an ingest error", func() {

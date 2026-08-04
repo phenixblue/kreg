@@ -152,7 +152,7 @@ var _ = Describe("BGPBackendPolicy Controller", func() {
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 				Snapshot: fakeSnapshotSource{candidates: []pipeline.BackendCandidate{
-					{Prefix: "198.51.100.10/32", ClusterID: "atl-1"},
+					{Prefix: testAtl1Address, ClusterID: testAtl1},
 					{Prefix: "198.51.100.20/32", ClusterID: "atl-2"},
 				}},
 				Driver: noopDriver{},
@@ -172,7 +172,7 @@ var _ = Describe("BGPBackendPolicy Controller", func() {
 
 			By("reconciling again with atl-2 withdrawn")
 			controllerReconciler.Snapshot = fakeSnapshotSource{candidates: []pipeline.BackendCandidate{
-				{Prefix: "198.51.100.10/32", ClusterID: "atl-1"},
+				{Prefix: testAtl1Address, ClusterID: testAtl1},
 			}}
 			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(err).NotTo(HaveOccurred())
@@ -180,7 +180,7 @@ var _ = Describe("BGPBackendPolicy Controller", func() {
 			By("pruning the withdrawn candidate's EndpointSlice")
 			Expect(k8sClient.List(ctx, &slices, listOpts...)).To(Succeed())
 			Expect(slices.Items).To(HaveLen(1))
-			Expect(slices.Items[0].Name).To(Equal("test-resource-kreg-atl-1"))
+			Expect(slices.Items[0].Name).To(Equal("test-resource-kreg-atl-1-198-51-100-10-32"))
 		})
 	})
 })

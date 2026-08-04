@@ -121,7 +121,7 @@ var _ = Describe("Render", func() {
 
 		Expect(output.Service.Name).To(Equal("prod-web-kreg"))
 		Expect(output.EndpointSlices).To(HaveLen(1))
-		Expect(output.EndpointSlices[0].Name).To(Equal("prod-web-kreg-atl-1"))
+		Expect(output.EndpointSlices[0].Name).To(Equal("prod-web-kreg-atl-1-198-51-100-10-32"))
 		Expect(output.DriverObjects).To(HaveLen(1))
 
 		compareGolden("service.yaml", output.Service)
@@ -192,7 +192,7 @@ var _ = Describe("Render", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(output.EndpointSlices).To(HaveLen(2))
 		names := []string{output.EndpointSlices[0].Name, output.EndpointSlices[1].Name}
-		Expect(names).To(ConsistOf("prod-web-kreg-atl-1", "prod-web-kreg-atl-2"))
+		Expect(names).To(ConsistOf("prod-web-kreg-atl-1-198-51-100-10-32", "prod-web-kreg-atl-2-198-51-100-74-32"))
 	})
 
 	It("propagates a driver error", func() {

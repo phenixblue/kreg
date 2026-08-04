@@ -21,47 +21,113 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+// AdvertisedBackendSpec is empty: AdvertisedBackend is entirely
+// controller-written, the materialized view of the RIB — there is no
+// user-configurable desired state. See docs/design/architecture.md §2.4.
+type AdvertisedBackendSpec struct{}
 
-// AdvertisedBackendSpec defines the desired state of AdvertisedBackend
-type AdvertisedBackendSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
-
-	// foo is an example field of AdvertisedBackend. Edit advertisedbackend_types.go to remove/update
+// BackendAttributes are the semantic attributes decoded from a route's
+// BGP large communities (or their fallbacks), mirroring
+// pipeline.BackendCandidate. MED and ASPath are int64, not uint32: 4-byte
+// ASNs and this design's own worked example (asPath: [4200000101])
+// already exceed int32's range, the only signed format OpenAPI schemas
+// natively support below it — same reasoning as BGPPeerConfig's ASN
+// fields.
+type BackendAttributes struct {
 	// +optional
-	Foo *string `json:"foo,omitempty"`
+	Weight int32 `json:"weight,omitempty"`
+
+	// +optional
+	Tier string `json:"tier,omitempty"`
+
+	// +optional
+	Drain bool `json:"drain,omitempty"`
+
+	// +optional
+	ServiceTag *int32 `json:"serviceTag,omitempty"`
+
+	// +optional
+	MED int64 `json:"med,omitempty"`
+
+	// +optional
+	ASPath []int64 `json:"asPath,omitempty"`
+
+	// +optional
+	LargeCommunities []string `json:"largeCommunities,omitempty"`
 }
+
+// BackendState mirrors where a route currently sits in the pipeline.
+// Only Active, Draining, and Rejected are reachable before the Damper
+// exists (build-order step 4) — HoldDown and Dampened are schema-valid
+// but nothing sets them yet.
+// +kubebuilder:validation:Enum=Active;HoldDown;Draining;Dampened;Rejected
+type BackendState string
+
+const (
+	BackendStateActive   BackendState = "Active"
+	BackendStateHoldDown BackendState = "HoldDown"
+	BackendStateDraining BackendState = "Draining"
+	BackendStateDampened BackendState = "Dampened"
+	BackendStateRejected BackendState = "Rejected"
+)
 
 // AdvertisedBackendStatus defines the observed state of AdvertisedBackend.
 type AdvertisedBackendStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
-
-	// conditions represent the current state of the AdvertisedBackend resource.
-	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
-	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
-	//
-	// The status of each condition is one of True, False, or Unknown.
-	// +listType=map
-	// +listMapKey=type
 	// +optional
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	Prefix string `json:"prefix,omitempty"`
+
+	// +optional
+	ClusterID string `json:"clusterID,omitempty"`
+
+	// peer is the BGP peer address this route was learned from.
+	// +optional
+	Peer string `json:"peer,omitempty"`
+
+	// +optional
+	Locality Locality `json:"locality,omitzero"`
+
+	// +optional
+	Attributes BackendAttributes `json:"attributes,omitzero"`
+
+	// +optional
+	State BackendState `json:"state,omitempty"`
+
+	// reason explains a non-Active state, e.g. "prefix 203.0.113.5/32 not
+	// in allowedPrefixes for any cluster".
+	// +optional
+	Reason string `json:"reason,omitempty"`
+
+	// flapCount24h and dampeningPenalty are populated once the Damper
+	// exists (build-order step 4); always zero until then.
+	// +optional
+	FlapCount24h int32 `json:"flapCount24h,omitempty"`
+
+	// +optional
+	DampeningPenalty int32 `json:"dampeningPenalty,omitempty"`
+
+	// +optional
+	FirstSeen *metav1.Time `json:"firstSeen,omitempty"`
+
+	// +optional
+	LastChange *metav1.Time `json:"lastChange,omitempty"`
+
+	// boundPolicies are the BGPBackendPolicies (as "namespace/name") whose
+	// selector currently matches this backend.
+	// +optional
+	BoundPolicies []string `json:"boundPolicies,omitempty"`
+
+	// generatedResources lists what the Reconcile stage produced for this
+	// backend, as "Kind/namespace/name".
+	// +optional
+	GeneratedResources []string `json:"generatedResources,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster
+// +kubebuilder:printcolumn:name="Prefix",type=string,JSONPath=`.status.prefix`
+// +kubebuilder:printcolumn:name="Cluster",type=string,JSONPath=`.status.clusterID`
+// +kubebuilder:printcolumn:name="State",type=string,JSONPath=`.status.state`
 
 // AdvertisedBackend is the Schema for the advertisedbackends API
 type AdvertisedBackend struct {
@@ -72,8 +138,8 @@ type AdvertisedBackend struct {
 	metav1.ObjectMeta `json:"metadata,omitzero"`
 
 	// spec defines the desired state of AdvertisedBackend
-	// +required
-	Spec AdvertisedBackendSpec `json:"spec"`
+	// +optional
+	Spec AdvertisedBackendSpec `json:"spec,omitzero"`
 
 	// status defines the observed state of AdvertisedBackend
 	// +optional

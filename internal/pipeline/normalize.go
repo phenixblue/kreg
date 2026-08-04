@@ -51,6 +51,14 @@ func normalizeRoute(route RIBRoute, cm *kregv1alpha1.CommunityMapSpec) (BackendC
 		LargeCommunities: route.LargeCommunities,
 	}
 
+	// Already rejected by Authorize: don't decode communities on data
+	// that's already untrusted, just carry the rejection through.
+	if route.Rejected {
+		candidate.Rejected = true
+		candidate.Reason = route.Reason
+		return candidate, nil
+	}
+
 	anyRuleMatched := false
 	weightSet := false
 	if cm != nil {

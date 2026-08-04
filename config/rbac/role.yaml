@@ -31,6 +31,7 @@ rules:
 - apiGroups:
   - kreg.twr.dev
   resources:
+  - advertisedbackends
   - bgpbackendpolicies
   - bgppeerconfigs
   verbs:
@@ -44,18 +45,19 @@ rules:
 - apiGroups:
   - kreg.twr.dev
   resources:
-  - bgpbackendpolicies/finalizers
-  - bgppeerconfigs/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - kreg.twr.dev
-  resources:
+  - advertisedbackends/status
   - bgpbackendpolicies/status
   - bgppeerconfigs/status
   verbs:
   - get
   - patch
+  - update
+- apiGroups:
+  - kreg.twr.dev
+  resources:
+  - bgpbackendpolicies/finalizers
+  - bgppeerconfigs/finalizers
+  verbs:
   - update
 - apiGroups:
   - kreg.twr.dev
