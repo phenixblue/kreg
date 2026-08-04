@@ -21,6 +21,7 @@ import (
 	"maps"
 	"net"
 	"slices"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -132,8 +133,20 @@ func ServiceName(policy *kregv1alpha1.BGPBackendPolicy) string {
 
 // EndpointSliceName is the per-candidate EndpointSlice name Render
 // generates, given the Service name it belongs to. See ServiceName.
-func EndpointSliceName(serviceName, clusterID string) string {
-	return fmt.Sprintf("%s-%s", serviceName, clusterID)
+// clusterID alone doesn't disambiguate: a policy can legitimately select
+// multiple prefixes (VIPs) from the same cluster, so prefix is included
+// too — otherwise those candidates would collide on the same object name
+// and silently overwrite one another.
+func EndpointSliceName(serviceName, clusterID, prefix string) string {
+	return fmt.Sprintf("%s-%s-%s", serviceName, clusterID, SanitizeForName(prefix))
+}
+
+// SanitizeForName converts a CIDR-style prefix into a value safe to use
+// as a Kubernetes object name segment. Exported so internal/report can
+// build the exact same AdvertisedBackend/EndpointSlice name segments
+// without drifting from what Render actually generates.
+func SanitizeForName(prefix string) string {
+	return strings.NewReplacer(".", "-", "/", "-", ":", "-").Replace(prefix)
 }
 
 func managedByLabels(policy *kregv1alpha1.BGPBackendPolicy, extra map[string]string) map[string]string {
@@ -203,7 +216,7 @@ func renderEndpointSlices(policy *kregv1alpha1.BGPBackendPolicy, serviceName str
 		endpointSlices = append(endpointSlices, &discoveryv1.EndpointSlice{
 			TypeMeta: metav1.TypeMeta{APIVersion: "discovery.k8s.io/v1", Kind: "EndpointSlice"},
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      EndpointSliceName(serviceName, c.ClusterID),
+				Name:      EndpointSliceName(serviceName, c.ClusterID, c.Prefix),
 				Namespace: policy.Namespace,
 				Labels: managedByLabels(policy, map[string]string{
 					discoveryv1.LabelServiceName: serviceName,

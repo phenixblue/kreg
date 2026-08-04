@@ -105,7 +105,7 @@ var _ = Describe("BuildAdvertisedBackends", func() {
 
 		status := backends[0].Status
 		Expect(status.BoundPolicies).To(ConsistOf("gateways/prod-web"))
-		Expect(status.GeneratedResources).To(ConsistOf("EndpointSlice/gateways/prod-web-kreg-atl-1"))
+		Expect(status.GeneratedResources).To(ConsistOf("EndpointSlice/gateways/prod-web-kreg-atl-1-198-51-100-10-32"))
 	})
 
 	It("excludes a policy whose selector doesn't match", func() {

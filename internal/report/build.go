@@ -22,7 +22,6 @@ package report
 import (
 	"fmt"
 	"slices"
-	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -113,7 +112,7 @@ func bindings(c pipeline.BackendCandidate, policies []kregv1alpha1.BGPBackendPol
 		boundPolicies = append(boundPolicies, fmt.Sprintf("%s/%s", policy.Namespace, policy.Name))
 		serviceName := reconcile.ServiceName(&policy)
 		generatedResources = append(generatedResources,
-			fmt.Sprintf("EndpointSlice/%s/%s", policy.Namespace, reconcile.EndpointSliceName(serviceName, c.ClusterID)))
+			fmt.Sprintf("EndpointSlice/%s/%s", policy.Namespace, reconcile.EndpointSliceName(serviceName, c.ClusterID, c.Prefix)))
 	}
 	slices.Sort(boundPolicies)
 	slices.Sort(generatedResources)
@@ -138,6 +137,5 @@ func objectName(c pipeline.BackendCandidate) string {
 	if clusterID == "" {
 		clusterID = unattributedClusterID
 	}
-	sanitizer := strings.NewReplacer(".", "-", "/", "-", ":", "-")
-	return sanitizer.Replace(c.Prefix) + "-" + clusterID
+	return reconcile.SanitizeForName(c.Prefix) + "-" + clusterID
 }

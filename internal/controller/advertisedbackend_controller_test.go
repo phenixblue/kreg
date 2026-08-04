@@ -105,7 +105,7 @@ var _ = Describe("AdvertisedBackend Controller", func() {
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "198-51-100-10-32-atl-1"}, &activeBackend)).To(Succeed())
 		Expect(activeBackend.Status.State).To(Equal(kregv1alpha1.BackendStateActive))
 		Expect(activeBackend.Status.BoundPolicies).To(ConsistOf(policyNamespace + "/" + policyName))
-		Expect(activeBackend.Status.GeneratedResources).To(ConsistOf("EndpointSlice/" + policyNamespace + "/" + policyName + "-kreg-atl-1"))
+		Expect(activeBackend.Status.GeneratedResources).To(ConsistOf("EndpointSlice/" + policyNamespace + "/" + policyName + "-kreg-atl-1-198-51-100-10-32"))
 		Expect(activeBackend.Status.FirstSeen).NotTo(BeNil())
 		firstSeen := activeBackend.Status.FirstSeen
 

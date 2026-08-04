@@ -180,7 +180,7 @@ var _ = Describe("BGPBackendPolicy Controller", func() {
 			By("pruning the withdrawn candidate's EndpointSlice")
 			Expect(k8sClient.List(ctx, &slices, listOpts...)).To(Succeed())
 			Expect(slices.Items).To(HaveLen(1))
-			Expect(slices.Items[0].Name).To(Equal("test-resource-kreg-atl-1"))
+			Expect(slices.Items[0].Name).To(Equal("test-resource-kreg-atl-1-198-51-100-10-32"))
 		})
 	})
 })
