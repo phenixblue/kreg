@@ -1,0 +1,8 @@
+## Append samples of your project ##
+resources:
+- kreg_v1alpha1_bgppeerconfig.yaml
+- kreg_v1alpha1_bgpbackendpolicy.yaml
+- kreg_v1alpha1_communitymap.yaml
+- kreg_v1alpha1_advertisedbackend.yaml
+- kreg_v1alpha1_bgpgatewayclassconfig.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

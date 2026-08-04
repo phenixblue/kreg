@@ -1,0 +1,9 @@
+apiVersion: kreg.twr.dev/v1alpha1
+kind: BGPBackendPolicy
+metadata:
+  labels:
+    app.kubernetes.io/name: kreg
+    app.kubernetes.io/managed-by: kustomize
+  name: bgpbackendpolicy-sample
+spec:
+  # TODO(user): Add fields here

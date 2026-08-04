@@ -16,6 +16,10 @@
 coverage.*
 *.coverprofile
 profile.cov
+cover.out
+
+# kubebuilder tool binaries and envtest assets
+/bin/
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
