@@ -33,7 +33,8 @@ workload clusters (Calico/BIRD, Cilium/GoBGP)
    route reflectors (BIRD / FRR)
         │  iBGP
         ▼
-   kreg-controller ──► ServiceEntry / WorkloadEntry / DestinationRule
+   kreg-controller ──► Service / EndpointSlice (portable)
+        │              + DestinationRule (Istio driver, v1)
         │                              │
         │                              ▼
         └──────────────────────►  istiod ──► Istio ingress gateway
@@ -41,11 +42,13 @@ workload clusters (Calico/BIRD, Cilium/GoBGP)
                                           anycast + ECMP from the edge
 ```
 
-App teams author plain `HTTPRoute`s. The BGP layer is invisible to them.
+App teams author plain `HTTPRoute`s against a plain `Service`. The BGP layer
+is invisible to them, and — behind a driver boundary in the reconciler — so
+is the choice of Gateway API implementation.
 
 ## API
 
-Five kinds under `kreg.io/v1alpha1`:
+Five kinds under `kreg.twr.dev/v1alpha1`:
 
 | Kind | Scope | Purpose |
 |---|---|---|

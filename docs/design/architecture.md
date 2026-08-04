@@ -1,12 +1,7 @@
 # KREG — Kubernetes Routable Edge Gateway
 
 **Repo:** `github.com/phenixblue/kreg`
-**Binary:** `kreg-controller` · **API group:** `kreg.io`, version `v1alpha1`
-
-> API group note: `kreg.io` assumes you can register the domain. If not,
-> `kreg.phenixblue.io` or `kreg.sh` are the usual fallbacks. Decide before the
-> first CRD ships — changing an API group after users exist is a migration,
-> not a rename.
+**Binary:** `kreg-controller` · **API group:** `kreg.twr.dev`, version `v1alpha1`
 
 **One-line scope:** a control-plane translator that consumes BGP routing state
 advertised by Kubernetes clusters and reconciles it into Istio + Gateway API
@@ -72,7 +67,7 @@ filters.
 | **Authorize** | Drop routes not in the peer's `allowedPrefixes` | The security boundary. Runs before anything else |
 | **Normalize** | Decode communities/MED/AS-path into a `BackendCandidate` | Pure function. RIB snapshot in, semantic model out |
 | **Damp** | Hold-down, flap dampening, debounce | Prevents route churn from becoming xDS churn |
-| **Reconcile** | Settled snapshot + policies → Istio/Gateway API CRs | controller-runtime, standard desired-state diff |
+| **Reconcile** | Settled snapshot + policies → `Service`/`EndpointSlice` + driver-lowered policy CRs | controller-runtime, standard desired-state diff |
 | **Report** | Write `AdvertisedBackend` status objects, metrics, events | The debuggability surface. Do not treat as optional |
 
 ---
@@ -87,7 +82,7 @@ object (namespaced), one is a reusable decoder, one is read-only status.
 How the controller acquires routing state, and the trust boundary.
 
 ```yaml
-apiVersion: kreg.io/v1alpha1
+apiVersion: kreg.twr.dev/v1alpha1
 kind: BGPPeerConfig
 metadata:
   name: atl-reflectors
@@ -143,7 +138,7 @@ converter: an operator drains a cluster with a route-map, no Kubernetes
 access required.
 
 ```yaml
-apiVersion: kreg.io/v1alpha1
+apiVersion: kreg.twr.dev/v1alpha1
 kind: CommunityMap
 metadata:
   name: default
@@ -179,7 +174,7 @@ The DNSPolicy analogue. Targets a `Gateway` or `HTTPRoute` via
 `targetRef`, following the Gateway API policy-attachment convention.
 
 ```yaml
-apiVersion: kreg.io/v1alpha1
+apiVersion: kreg.twr.dev/v1alpha1
 kind: BGPBackendPolicy
 metadata:
   name: prod-web
@@ -237,7 +232,7 @@ status:
   activeBackends: 6
   suppressedBackends: 1
   generated:
-    - ServiceEntry/gateways/prod-web-kreg
+    - Service/gateways/prod-web-kreg
     - DestinationRule/gateways/prod-web-kreg
 ```
 
@@ -249,7 +244,7 @@ of `birdc show route` on a box the app team can't reach. Treat it as a
 first-class product feature, not telemetry.
 
 ```yaml
-apiVersion: kreg.io/v1alpha1
+apiVersion: kreg.twr.dev/v1alpha1
 kind: AdvertisedBackend
 metadata:
   name: 198-51-100-10-32-atl-1
@@ -276,7 +271,7 @@ status:
   lastChange: "2026-08-04T02:11:07Z"
 
   boundPolicies: ["gateways/prod-web"]
-  generatedResources: ["WorkloadEntry/gateways/prod-web-atl-1"]
+  generatedResources: ["EndpointSlice/gateways/prod-web-kreg-atl-1"]
 ```
 
 ### 2.5 `BGPGatewayClassConfig` — optional, cluster-scoped
@@ -289,55 +284,70 @@ built-in defaults.
 
 ## 3. What the reconciler writes
 
-Istio backs the gateway, and the backends live outside the cluster, so they
-enter as `ServiceEntry` + `WorkloadEntry`. Istio supports referencing a
-`ServiceEntry` hostname directly from an `HTTPRoute` `backendRef` using
-`kind: Hostname, group: networking.istio.io` — that's the seam this whole
-design hangs on.
+Backend identity — "here is a `Service`, here are its addresses" — is
+portable Kubernetes, not an Istio extension. A headless `Service` (no
+selector) plus hand-written `EndpointSlice`s resolves through
+`HTTPRoute.backendRefs` on any conformant Gateway API implementation, because
+that resolution path is core service networking, not a vendor hook. That's
+the seam this design hangs on, in place of an implementation-specific one.
 
-**Generated — `ServiceEntry`:**
+Traffic policy — locality-weighted LB, outlier detection, backend TLS — isn't
+standardized across implementations yet. That half goes through a small
+**backend driver** inside the reconciler: `BGPBackendPolicy` (§2.3) is the
+vendor-neutral input, and a driver lowers it into whatever the target Gateway
+implementation understands. v1 ships one driver, Istio, per the build-order
+reasoning in §7 — one good integration before a second is attempted. The
+driver boundary exists so a second driver (Envoy Gateway, targeting its
+`BackendTrafficPolicy`) is additive later, not a redesign.
+
+**Generated — headless `Service`:**
 
 ```yaml
-apiVersion: networking.istio.io/v1
-kind: ServiceEntry
+apiVersion: v1
+kind: Service
 metadata:
   name: prod-web-kreg
   namespace: gateways
-  labels: {kreg.io/managed-by: prod-web}
+  labels: {kreg.twr.dev/managed-by: prod-web}
 spec:
-  hosts: ["prod-web.kreg.internal"]
-  location: MESH_EXTERNAL
-  resolution: STATIC
+  clusterIP: None
   ports:
-    - {number: 8443, name: https, protocol: HTTPS}
-  workloadSelector:
-    labels: {kreg.io/service: prod-web}
+    - {name: https, port: 8443, protocol: TCP}
 ```
 
-**Generated — one `WorkloadEntry` per active advertised VIP:**
+**Generated — one `EndpointSlice` per active advertised VIP:**
 
 ```yaml
-apiVersion: networking.istio.io/v1
-kind: WorkloadEntry
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
 metadata:
-  name: prod-web-atl-1
+  name: prod-web-kreg-atl-1
   namespace: gateways
-spec:
-  address: 198.51.100.10          # the /32 learned via BGP
-  ports: {https: 8443}
-  labels: {kreg.io/service: prod-web}
-  locality: "us-east/us-east-atl-a"
-  weight: 80                       # decoded from large community
+  labels:
+    kubernetes.io/service-name: prod-web-kreg
+    kreg.twr.dev/managed-by: prod-web
+addressType: IPv4
+ports:
+  - {name: https, port: 8443, protocol: TCP}
+endpoints:
+  - addresses: ["198.51.100.10"]      # the /32 learned via BGP
+    conditions: {ready: true}
+    zone: us-east-atl-a               # decoded locality
+    hints: {forZones: [{name: us-east-atl-a}]}
 ```
 
-**Generated — `DestinationRule`:**
+`weight` from the large community isn't expressible on a core `EndpointSlice`
+endpoint — that's exactly the kind of thing that goes through the driver as
+part of a `BGPBackendPolicy`-attached traffic-weighting policy instead.
+
+**Generated by the Istio driver — `DestinationRule`:**
 
 ```yaml
 apiVersion: networking.istio.io/v1
 kind: DestinationRule
 metadata: {name: prod-web-kreg, namespace: gateways}
 spec:
-  host: prod-web.kreg.internal
+  host: prod-web-kreg.gateways.svc.cluster.local
   trafficPolicy:
     loadBalancer:
       localityLbSetting:
@@ -352,6 +362,12 @@ spec:
     tls: {mode: SIMPLE, sni: prod-web.internal}
 ```
 
+An Envoy Gateway driver would lower the same `BGPBackendPolicy` into a
+`BackendTrafficPolicy`/`ClientTrafficPolicy` targeting the same `Service`.
+Backend TLS specifically may not even need a driver-specific object: Gateway
+API's standard-channel `BackendTLSPolicy` is implementation-neutral and both
+Istio and Envoy Gateway honor it.
+
 **Written by the human, unchanged by the controller — `HTTPRoute`:**
 
 ```yaml
@@ -363,17 +379,17 @@ spec:
   hostnames: ["www.example.com"]
   rules:
     - backendRefs:
-        - kind: Hostname
-          group: networking.istio.io
-          name: prod-web.kreg.internal
+        - name: prod-web-kreg
           port: 8443
 ```
 
-App teams keep authoring plain `HTTPRoute`s. The BGP layer is entirely
-invisible to them, which is the whole point.
+App teams keep authoring plain `HTTPRoute`s against a plain `Service` — no
+KREG-specific hostname, no implementation-specific `kind`/`group` override.
+The BGP layer is entirely invisible to them, which is the whole point, and
+now so is the choice of Gateway implementation.
 
 **Rules for the reconciler:** own resources by label
-(`kreg.io/managed-by`), never patch resources you don't own, never emit
+(`kreg.twr.dev/managed-by`), never patch resources you don't own, never emit
 `EnvoyFilter`, and always reconcile from a full RIB snapshot rather than an
 update stream. BGP is soft state; Gateway API is desired state. Bridging
 those with deltas will produce drift you cannot debug.
@@ -526,8 +542,10 @@ If you don't already have a colo footprint, this shapes your v1 hosting:
 ## 7. Build order
 
 1. **Normalizer + reconciler, no BGP.** Feed a hand-written route table
-   struct, emit ServiceEntry/WorkloadEntry/DestinationRule. Golden-file
-   tests. Proves the output model is correct before any networking exists.
+   struct, emit `Service`/`EndpointSlice` plus the Istio driver's
+   `DestinationRule`. Golden-file tests. Proves the output model is correct
+   before any networking exists, and proves the driver boundary is real by
+   having exactly one thing on each side of it.
 2. **GoBGP ingest behind the interface.** Tier 1 rig with ExaBGP speakers.
 3. **`CommunityMap` + `AdvertisedBackend`.** The differentiators. Ship the
    debuggability surface early — it's what makes demos land.
@@ -535,19 +553,15 @@ If you don't already have a colo footprint, this shapes your v1 hosting:
 5. **`BGPPeerConfig` authorization + session management.** Security-critical,
    so do it deliberately rather than as an afterthought.
 6. **Tier 2 validation, then a real two-PoP deployment on Vultr.**
+7. **Envoy Gateway driver**, once the Istio driver has real production
+   mileage — implements the same `BGPBackendPolicy` lowering against
+   `BackendTrafficPolicy`/`ClientTrafficPolicy` instead of `DestinationRule`.
+   Not v1.
 
 ## 8. Open questions worth deciding early
 
-- **Does the controller ever originate routes?** Announcing gateway
-  reachability back toward clusters, or withdrawing on istiod failure, would
-  make it bidirectional — and much harder to reason about. Recommend: no,
-  stay read-only in v1.
-- **`serviceTag` community vs. per-service prefix convention.** The community
-  is more flexible; encoding service identity in the prefix's position within
-  the cluster's block is simpler to debug. Pick one; supporting both doubles
-  the surface.
-- **Envoy Gateway support?** Its `Backend` CRD is a cleaner target than
-  `ServiceEntry` and would broaden the audience. But Istio first — you have
-  the operational familiarity, and one good integration beats two shaky ones.
 - **Where do TLS certs for the gateway→cluster hop come from?** Not in scope
   above, but it's the first thing anyone will ask in a security review.
+  `BackendTLSPolicy` (Gateway API standard channel) is the likely portable
+  answer, worth confirming against both the Istio and future Envoy Gateway
+  drivers before committing.
