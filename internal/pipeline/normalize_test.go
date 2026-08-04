@@ -26,6 +26,10 @@ import (
 
 func strPtr(s string) *string { return &s }
 
+// tierCanaryCommunity is the "2:1" (tier) large community docCommunityMap
+// maps to tier=canary — reused verbatim across several routes below.
+const tierCanaryCommunity = "4200000000:2:1"
+
 // docCommunityMap mirrors the CommunityMap example in
 // docs/design/architecture.md §2.2.
 func docCommunityMap() *kregv1alpha1.CommunityMapSpec {
@@ -36,7 +40,7 @@ func docCommunityMap() *kregv1alpha1.CommunityMapSpec {
 				Set:   kregv1alpha1.CommunityFieldSet{Field: kregv1alpha1.CommunityFieldWeight, FromCommunityValue: true},
 			},
 			{
-				Match: kregv1alpha1.CommunityMatch{LargeCommunity: "4200000000:2:1"},
+				Match: kregv1alpha1.CommunityMatch{LargeCommunity: tierCanaryCommunity},
 				Set:   kregv1alpha1.CommunityFieldSet{Field: kregv1alpha1.CommunityFieldTier, Value: strPtr("canary")},
 			},
 			{
@@ -64,7 +68,7 @@ var _ = Describe("Normalize", func() {
 			ClusterID:        "atl-1",
 			Peer:             "rr-atl-a",
 			MED:              100,
-			LargeCommunities: []string{"4200000000:1:80", "4200000000:2:1", "4200000000:3:1", "4200000000:4:80"},
+			LargeCommunities: []string{"4200000000:1:80", tierCanaryCommunity, "4200000000:3:1", "4200000000:4:80"},
 		}}
 
 		candidates, err := Normalize(routes, docCommunityMap())
@@ -85,7 +89,7 @@ var _ = Describe("Normalize", func() {
 			MED:    100,
 			// tier community present, but nothing in the "1:*" (weight) or
 			// "4:*" (serviceTag) function codes.
-			LargeCommunities: []string{"4200000000:2:1"},
+			LargeCommunities: []string{tierCanaryCommunity},
 		}}
 
 		candidates, err := Normalize(routes, docCommunityMap())
@@ -157,7 +161,7 @@ var _ = Describe("Normalize", func() {
 			// route to count as understood.
 			routes := []RIBRoute{{
 				Prefix:           "198.51.100.15/32",
-				LargeCommunities: []string{"4200000000:2:1"},
+				LargeCommunities: []string{tierCanaryCommunity},
 			}}
 			cm := docCommunityMap()
 			cm.OnUnmappedCommunity = kregv1alpha1.UnmappedCommunityReject

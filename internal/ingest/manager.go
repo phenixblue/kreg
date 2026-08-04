@@ -135,10 +135,10 @@ func toAPIPeer(peer kregv1alpha1.BGPPeer) *api.Peer {
 	if peer.Timers != nil {
 		cfg := &api.TimersConfig{}
 		if peer.Timers.Hold != nil {
-			cfg.HoldTime = uint64(peer.Timers.Hold.Duration.Seconds())
+			cfg.HoldTime = uint64(peer.Timers.Hold.Seconds())
 		}
 		if peer.Timers.Keepalive != nil {
-			cfg.KeepaliveInterval = uint64(peer.Timers.Keepalive.Duration.Seconds())
+			cfg.KeepaliveInterval = uint64(peer.Timers.Keepalive.Seconds())
 		}
 		apiPeer.Timers = &api.Timers{Config: cfg}
 	}
@@ -146,7 +146,7 @@ func toAPIPeer(peer kregv1alpha1.BGPPeer) *api.Peer {
 	if peer.GracefulRestart != nil {
 		gr := &api.GracefulRestart{Enabled: peer.GracefulRestart.Enabled}
 		if peer.GracefulRestart.StaleRoutesTime != nil {
-			gr.StaleRoutesTime = uint32(peer.GracefulRestart.StaleRoutesTime.Duration.Seconds())
+			gr.StaleRoutesTime = uint32(peer.GracefulRestart.StaleRoutesTime.Seconds())
 		}
 		apiPeer.GracefulRestart = gr
 	}

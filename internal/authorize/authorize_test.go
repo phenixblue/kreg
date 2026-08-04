@@ -25,14 +25,21 @@ import (
 	"github.com/phenixblue/kreg/internal/pipeline"
 )
 
+const (
+	atl1        = "atl-1"
+	usEast      = "us-east"
+	usEastAtlA  = "us-east-atl-a"
+	atl1Address = "198.51.100.10/32"
+)
+
 // docBindings mirrors the ClusterBinding worked example in
 // docs/design/architecture.md §2.1.
 func docBindings() []kregv1alpha1.ClusterBinding {
 	return []kregv1alpha1.ClusterBinding{
 		{
-			ClusterID:       "atl-1",
+			ClusterID:       atl1,
 			AllowedPrefixes: []string{"198.51.100.0/26"},
-			Locality:        kregv1alpha1.Locality{Region: "us-east", Zone: "us-east-atl-a"},
+			Locality:        kregv1alpha1.Locality{Region: usEast, Zone: usEastAtlA},
 		},
 		{
 			ClusterID:       "atl-2",
@@ -44,26 +51,26 @@ func docBindings() []kregv1alpha1.ClusterBinding {
 
 var _ = Describe("Authorize", func() {
 	It("attributes a route to the binding whose allowedPrefixes contains it", func() {
-		routes := []pipeline.RIBRoute{{Prefix: "198.51.100.10/32", Peer: "rr-atl-a"}}
+		routes := []pipeline.RIBRoute{{Prefix: atl1Address, Peer: "rr-atl-a"}}
 
 		authorized, err := authorize.Authorize(routes, docBindings())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(authorized).To(HaveLen(1))
-		Expect(authorized[0].ClusterID).To(Equal("atl-1"))
-		Expect(authorized[0].Locality).To(Equal(pipeline.Locality{Region: "us-east", Zone: "us-east-atl-a"}))
+		Expect(authorized[0].ClusterID).To(Equal(atl1))
+		Expect(authorized[0].Locality).To(Equal(pipeline.Locality{Region: usEast, Zone: usEastAtlA}))
 		Expect(authorized[0].Peer).To(Equal("rr-atl-a")) // untouched fields survive
 	})
 
 	It("attributes adjacent bindings independently", func() {
 		routes := []pipeline.RIBRoute{
-			{Prefix: "198.51.100.10/32"}, // in atl-1's /26
+			{Prefix: atl1Address},        // in atl-1's /26
 			{Prefix: "198.51.100.70/32"}, // in atl-2's /26
 		}
 
 		authorized, err := authorize.Authorize(routes, docBindings())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(authorized).To(HaveLen(2))
-		Expect(authorized[0].ClusterID).To(Equal("atl-1"))
+		Expect(authorized[0].ClusterID).To(Equal(atl1))
 		Expect(authorized[1].ClusterID).To(Equal("atl-2"))
 	})
 
@@ -83,7 +90,7 @@ var _ = Describe("Authorize", func() {
 		// from ingest must not be trusted — only allowedPrefixes decides.
 		routes := []pipeline.RIBRoute{{
 			Prefix:    "198.51.100.70/32", // actually atl-2's range
-			ClusterID: "atl-1",            // asserted, wrong
+			ClusterID: atl1,               // asserted, wrong
 		}}
 
 		authorized, err := authorize.Authorize(routes, docBindings())
@@ -92,7 +99,7 @@ var _ = Describe("Authorize", func() {
 	})
 
 	It("rejects every route when there are no bindings at all", func() {
-		routes := []pipeline.RIBRoute{{Prefix: "198.51.100.10/32"}}
+		routes := []pipeline.RIBRoute{{Prefix: atl1Address}}
 
 		authorized, err := authorize.Authorize(routes, nil)
 		Expect(err).NotTo(HaveOccurred())
@@ -109,11 +116,11 @@ var _ = Describe("Authorize", func() {
 
 	It("returns an error for a binding with an unparseable allowedPrefixes entry", func() {
 		bindings := []kregv1alpha1.ClusterBinding{{
-			ClusterID:       "atl-1",
+			ClusterID:       atl1,
 			AllowedPrefixes: []string{"not-a-prefix"},
-			Locality:        kregv1alpha1.Locality{Region: "us-east", Zone: "us-east-atl-a"},
+			Locality:        kregv1alpha1.Locality{Region: usEast, Zone: usEastAtlA},
 		}}
-		routes := []pipeline.RIBRoute{{Prefix: "198.51.100.10/32"}}
+		routes := []pipeline.RIBRoute{{Prefix: atl1Address}}
 
 		_, err := authorize.Authorize(routes, bindings)
 		Expect(err).To(HaveOccurred())

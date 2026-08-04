@@ -31,6 +31,11 @@ import (
 	"github.com/phenixblue/kreg/internal/pipeline"
 )
 
+const (
+	testAtl1Address = "198.51.100.10/32"
+	testAtl1        = "atl-1"
+)
+
 var _ = Describe("AdvertisedBackend Controller", func() {
 	const policyName = "adv-test-policy"
 	const policyNamespace = "default"
@@ -78,8 +83,8 @@ var _ = Describe("AdvertisedBackend Controller", func() {
 		Expect(k8sClient.Create(ctx, policy)).To(Succeed())
 
 		active := pipeline.BackendCandidate{
-			Prefix:     "198.51.100.10/32",
-			ClusterID:  "atl-1",
+			Prefix:     testAtl1Address,
+			ClusterID:  testAtl1,
 			ServiceTag: &serviceTag,
 		}
 		rejected := pipeline.BackendCandidate{

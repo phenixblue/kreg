@@ -18,7 +18,9 @@ package reconcile
 
 import (
 	"fmt"
+	"maps"
 	"net"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -61,7 +63,7 @@ func Render(policy *kregv1alpha1.BGPBackendPolicy, candidates []pipeline.Backend
 	}
 
 	svc := renderService(policy)
-	slices, err := renderEndpointSlices(policy, svc.Name, selected)
+	endpointSlices, err := renderEndpointSlices(policy, svc.Name, selected)
 	if err != nil {
 		return nil, fmt.Errorf("render endpoint slices: %w", err)
 	}
@@ -72,7 +74,7 @@ func Render(policy *kregv1alpha1.BGPBackendPolicy, candidates []pipeline.Backend
 		return nil, fmt.Errorf("lower driver objects: %w", err)
 	}
 
-	return &Output{Service: svc, EndpointSlices: slices, DriverObjects: driverObjects}, nil
+	return &Output{Service: svc, EndpointSlices: endpointSlices, DriverObjects: driverObjects}, nil
 }
 
 // Select filters candidates to those matching a BGPBackendPolicy's
@@ -83,7 +85,7 @@ func Select(candidates []pipeline.BackendCandidate, sel kregv1alpha1.BackendSele
 		if c.Rejected {
 			continue
 		}
-		if len(sel.ClusterIDs) > 0 && !containsString(sel.ClusterIDs, c.ClusterID) {
+		if len(sel.ClusterIDs) > 0 && !slices.Contains(sel.ClusterIDs, c.ClusterID) {
 			continue
 		}
 		if sel.ServiceTag != nil && (c.ServiceTag == nil || *c.ServiceTag != *sel.ServiceTag) {
@@ -101,15 +103,6 @@ func Select(candidates []pipeline.BackendCandidate, sel kregv1alpha1.BackendSele
 		selected = append(selected, c)
 	}
 	return selected, nil
-}
-
-func containsString(list []string, s string) bool {
-	for _, item := range list {
-		if item == s {
-			return true
-		}
-	}
-	return false
 }
 
 func prefixWithinAny(prefix string, cidrs []string) (bool, error) {
@@ -145,9 +138,7 @@ func EndpointSliceName(serviceName, clusterID string) string {
 
 func managedByLabels(policy *kregv1alpha1.BGPBackendPolicy, extra map[string]string) map[string]string {
 	labels := map[string]string{ManagedByLabel: policy.Name}
-	for k, v := range extra {
-		labels[k] = v
-	}
+	maps.Copy(labels, extra)
 	return labels
 }
 
@@ -185,7 +176,7 @@ func renderService(policy *kregv1alpha1.BGPBackendPolicy) *corev1.Service {
 // docs/design/architecture.md §3.
 func renderEndpointSlices(policy *kregv1alpha1.BGPBackendPolicy, serviceName string, candidates []pipeline.BackendCandidate) ([]*discoveryv1.EndpointSlice, error) {
 	portName := backendPortName(policy.Spec.Backend)
-	slices := make([]*discoveryv1.EndpointSlice, 0, len(candidates))
+	endpointSlices := make([]*discoveryv1.EndpointSlice, 0, len(candidates))
 	for _, c := range candidates {
 		addr, addrType, err := addressAndType(c.Prefix)
 		if err != nil {
@@ -209,7 +200,7 @@ func renderEndpointSlices(policy *kregv1alpha1.BGPBackendPolicy, serviceName str
 			}
 		}
 
-		slices = append(slices, &discoveryv1.EndpointSlice{
+		endpointSlices = append(endpointSlices, &discoveryv1.EndpointSlice{
 			TypeMeta: metav1.TypeMeta{APIVersion: "discovery.k8s.io/v1", Kind: "EndpointSlice"},
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      EndpointSliceName(serviceName, c.ClusterID),
@@ -227,7 +218,7 @@ func renderEndpointSlices(policy *kregv1alpha1.BGPBackendPolicy, serviceName str
 			Endpoints: []discoveryv1.Endpoint{endpoint},
 		})
 	}
-	return slices, nil
+	return endpointSlices, nil
 }
 
 func addressAndType(prefix string) (string, discoveryv1.AddressType, error) {
