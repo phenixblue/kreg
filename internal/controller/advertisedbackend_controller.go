@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kregv1alpha1 "github.com/phenixblue/kreg/api/v1alpha1"
+	kregreconcile "github.com/phenixblue/kreg/internal/reconcile"
 	"github.com/phenixblue/kreg/internal/report"
 )
 
@@ -97,7 +98,7 @@ func (r *AdvertisedBackendReconciler) applyBackend(ctx context.Context, desired 
 	err := r.Get(ctx, client.ObjectKeyFromObject(desired), &current)
 	switch {
 	case apierrors.IsNotFound(err):
-		bare := &kregv1alpha1.AdvertisedBackend{ObjectMeta: metav1.ObjectMeta{Name: desired.Name}}
+		bare := &kregv1alpha1.AdvertisedBackend{ObjectMeta: metav1.ObjectMeta{Name: desired.Name, Labels: desired.Labels}}
 		if err := r.Create(ctx, bare); err != nil {
 			return fmt.Errorf("create: %w", err)
 		}
@@ -131,12 +132,13 @@ func statusChanged(old, latest kregv1alpha1.AdvertisedBackendStatus) bool {
 
 // pruneStaleBackends deletes AdvertisedBackend records for routes no
 // longer in the settled snapshot at all — not merely rejected, which
-// still produces a record (state: Rejected), but genuinely gone. KREG is
-// the sole writer of this cluster-scoped kind, so no ownership label
-// filtering is needed the way EndpointSlice pruning needs it.
+// still produces a record (state: Rejected), but genuinely gone. Listing
+// is scoped to report.ManagedByValue, the label every AdvertisedBackend
+// this reconciler creates carries, so an object of this kind this
+// reconciler didn't create is never a deletion candidate.
 func (r *AdvertisedBackendReconciler) pruneStaleBackends(ctx context.Context, desiredNames map[string]bool) error {
 	var existing kregv1alpha1.AdvertisedBackendList
-	if err := r.List(ctx, &existing); err != nil {
+	if err := r.List(ctx, &existing, client.MatchingLabels{kregreconcile.ManagedByLabel: report.ManagedByValue}); err != nil {
 		return fmt.Errorf("list: %w", err)
 	}
 	for i := range existing.Items {

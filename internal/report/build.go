@@ -35,6 +35,14 @@ import (
 // in that case, and an empty name segment isn't a usable object name.
 const unattributedClusterID = "unattributed"
 
+// ManagedByValue is the reconcile.ManagedByLabel value stamped on every
+// AdvertisedBackend this package builds. AdvertisedBackendReconciler's
+// prune step lists by this label rather than every object of the kind
+// cluster-wide, so it can never delete an AdvertisedBackend it didn't
+// create — see docs/design/architecture.md §3's "never patch a resource
+// it doesn't own" rule, applied here to deletes.
+const ManagedByValue = "advertisedbackend"
+
 // BuildAdvertisedBackends turns a settled snapshot into the desired
 // AdvertisedBackend objects: one per candidate, whether authorized or
 // rejected. Pure function — no cluster access — so it's tested the same
@@ -52,7 +60,10 @@ func buildOne(c pipeline.BackendCandidate, policies []kregv1alpha1.BGPBackendPol
 	boundPolicies, generatedResources := bindings(c, policies)
 
 	return kregv1alpha1.AdvertisedBackend{
-		ObjectMeta: metav1.ObjectMeta{Name: objectName(c)},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   objectName(c),
+			Labels: map[string]string{reconcile.ManagedByLabel: ManagedByValue},
+		},
 		Status: kregv1alpha1.AdvertisedBackendStatus{
 			Prefix:    c.Prefix,
 			ClusterID: c.ClusterID,

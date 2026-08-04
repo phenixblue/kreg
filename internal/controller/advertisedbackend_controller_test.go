@@ -129,6 +129,27 @@ var _ = Describe("AdvertisedBackend Controller", func() {
 		Expect(apierrors.IsNotFound(err)).To(BeTrue())
 	})
 
+	It("never deletes an AdvertisedBackend it didn't create", func() {
+		// pruneStaleBackends must only ever consider objects carrying this
+		// reconciler's own ManagedByLabel — an object of this kind created
+		// by anything else (a user, a future tool) must survive a sweep
+		// even though it matches nothing in the current snapshot.
+		foreign := &kregv1alpha1.AdvertisedBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: "foreign-object"},
+		}
+		Expect(k8sClient.Create(ctx, foreign)).To(Succeed())
+
+		r := &AdvertisedBackendReconciler{
+			Client:   k8sClient,
+			Scheme:   k8sClient.Scheme(),
+			Snapshot: fakeSnapshotSource{},
+		}
+		_, err := r.Reconcile(ctx, reconcile.Request{})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "foreign-object"}, &kregv1alpha1.AdvertisedBackend{})).To(Succeed())
+	})
+
 	It("enqueueGlobalSweep triggers a reconcile regardless of which BGPBackendPolicy changed", func() {
 		// BoundPolicies/GeneratedResources depend on every BGPBackendPolicy,
 		// so any change to any one of them must wake the reconciler — it

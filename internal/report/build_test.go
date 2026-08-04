@@ -23,6 +23,7 @@ import (
 
 	kregv1alpha1 "github.com/phenixblue/kreg/api/v1alpha1"
 	"github.com/phenixblue/kreg/internal/pipeline"
+	"github.com/phenixblue/kreg/internal/reconcile"
 	"github.com/phenixblue/kreg/internal/report"
 )
 
@@ -60,6 +61,13 @@ var _ = Describe("BuildAdvertisedBackends", func() {
 		backends := report.BuildAdvertisedBackends([]pipeline.BackendCandidate{docCandidate()}, nil)
 		Expect(backends).To(HaveLen(1))
 		Expect(backends[0].Name).To(Equal("198-51-100-10-32-atl-1"))
+	})
+
+	It("labels every backend it builds as owned by this controller", func() {
+		// AdvertisedBackendReconciler's prune step lists by this label so
+		// it never deletes an object of this kind it didn't create.
+		backends := report.BuildAdvertisedBackends([]pipeline.BackendCandidate{docCandidate()}, nil)
+		Expect(backends[0].Labels).To(Equal(map[string]string{reconcile.ManagedByLabel: report.ManagedByValue}))
 	})
 
 	It("reports an authorized, non-draining candidate as Active", func() {
