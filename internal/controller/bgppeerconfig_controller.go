@@ -23,8 +23,10 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	kregv1alpha1 "github.com/phenixblue/kreg/api/v1alpha1"
 	"github.com/phenixblue/kreg/internal/ingest"
@@ -93,8 +95,13 @@ func (r *BGPPeerConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *BGPPeerConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// GenerationChangedPredicate: status.peers[].uptime changes on every
+	// reconcile (it's elapsed time), so without this the watch would
+	// re-trigger on our own status write, forever — spec changes still
+	// trigger immediately; status-only refresh stays on
+	// statusPollInterval.
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&kregv1alpha1.BGPPeerConfig{}).
+		For(&kregv1alpha1.BGPPeerConfig{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Named("bgppeerconfig").
 		Complete(r)
 }

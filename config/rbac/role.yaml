@@ -58,6 +58,14 @@ rules:
   - patch
   - update
 - apiGroups:
+  - kreg.twr.dev
+  resources:
+  - communitymaps
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - networking.istio.io
   resources:
   - destinationrules

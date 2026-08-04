@@ -40,6 +40,8 @@ import (
 // does for any route with no matching rule.
 const communityMapName = "default"
 
+// +kubebuilder:rbac:groups=kreg.twr.dev,resources=communitymaps,verbs=get;list;watch
+
 // Source implements controller.SnapshotSource against real BGP data:
 // pull the current RIB, authorize it against every BGPPeerConfig's
 // clusterBindings, then normalize against the CommunityMap.

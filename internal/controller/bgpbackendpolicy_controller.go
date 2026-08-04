@@ -19,18 +19,29 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 
+	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	kregv1alpha1 "github.com/phenixblue/kreg/api/v1alpha1"
 	"github.com/phenixblue/kreg/internal/pipeline"
 	"github.com/phenixblue/kreg/internal/reconcile"
 	istiodriver "github.com/phenixblue/kreg/internal/reconcile/istio"
 )
+
+// snapshotPollInterval bounds how stale generated resources can get.
+// BGP routes change independent of the BGPBackendPolicy object itself —
+// there's no watch event for "the RIB changed" — so this periodic
+// requeue is what actually keeps Service/EndpointSlice/DestinationRule
+// in sync with reality, not just with edits to the policy.
+const snapshotPollInterval = 30 * time.Second
 
 // SnapshotSource provides the settled BackendCandidate snapshot the
 // reconciler renders against. internal/snapshot.Source is the real
@@ -99,6 +110,10 @@ func (r *BGPBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		generated = append(generated, fmt.Sprintf("%s/%s/%s", kind, obj.GetNamespace(), obj.GetName()))
 	}
 
+	if err := r.pruneStaleEndpointSlices(ctx, &policy, output.Service.Name, output.EndpointSlices); err != nil {
+		return ctrl.Result{}, fmt.Errorf("prune: %w", err)
+	}
+
 	policy.Status.Generated = generated
 	policy.Status.ActiveBackends = int32(len(output.EndpointSlices))
 	if err := r.Status().Update(ctx, &policy); err != nil {
@@ -106,7 +121,7 @@ func (r *BGPBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	log.Info("reconciled BGPBackendPolicy", "generated", len(generated))
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: snapshotPollInterval}, nil
 }
 
 // applyOwned creates or updates desired, refusing to overwrite a resource
@@ -129,13 +144,51 @@ func (r *BGPBackendPolicyReconciler) applyOwned(ctx context.Context, policyName 
 	return r.Update(ctx, desired)
 }
 
+// pruneStaleEndpointSlices deletes EndpointSlices this policy previously
+// generated for clusters no longer selected — e.g. after a route is
+// withdrawn. EndpointSlices are the only generated objects whose count
+// varies with the candidate set (Service and the driver's objects are
+// always exactly one per policy, deterministically named), so nothing
+// else needs this treatment today.
+func (r *BGPBackendPolicyReconciler) pruneStaleEndpointSlices(ctx context.Context, policy *kregv1alpha1.BGPBackendPolicy, serviceName string, desired []*discoveryv1.EndpointSlice) error {
+	desiredNames := make(map[string]bool, len(desired))
+	for _, slice := range desired {
+		desiredNames[slice.Name] = true
+	}
+
+	var existing discoveryv1.EndpointSliceList
+	if err := r.List(ctx, &existing,
+		client.InNamespace(policy.Namespace),
+		client.MatchingLabels{
+			reconcile.ManagedByLabel:     policy.Name,
+			discoveryv1.LabelServiceName: serviceName,
+		},
+	); err != nil {
+		return fmt.Errorf("list endpoint slices: %w", err)
+	}
+
+	for i := range existing.Items {
+		slice := &existing.Items[i]
+		if desiredNames[slice.Name] {
+			continue
+		}
+		if err := r.Delete(ctx, slice); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete stale endpoint slice %s: %w", slice.Name, err)
+		}
+	}
+	return nil
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *BGPBackendPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.Driver == nil {
 		r.Driver = istiodriver.Driver{}
 	}
+	// GenerationChangedPredicate: our own status write shouldn't
+	// re-trigger the watch (redundant with snapshotPollInterval); spec
+	// changes still trigger immediately.
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&kregv1alpha1.BGPBackendPolicy{}).
+		For(&kregv1alpha1.BGPBackendPolicy{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Named("bgpbackendpolicy").
 		Complete(r)
 }

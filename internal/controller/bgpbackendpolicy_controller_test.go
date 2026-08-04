@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -114,6 +115,11 @@ var _ = Describe("BGPBackendPolicy Controller", func() {
 			if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-resource-kreg", Namespace: resourceNamespace}, svc); err == nil {
 				Expect(k8sClient.Delete(ctx, svc)).To(Succeed())
 			}
+
+			Expect(k8sClient.DeleteAllOf(ctx, &discoveryv1.EndpointSlice{},
+				client.InNamespace(resourceNamespace),
+				client.MatchingLabels{kregreconcile.ManagedByLabel: resourceName},
+			)).To(Succeed())
 		})
 
 		It("renders and applies the portable Service for the selected backends", func() {
@@ -139,6 +145,42 @@ var _ = Describe("BGPBackendPolicy Controller", func() {
 			var updated kregv1alpha1.BGPBackendPolicy
 			Expect(k8sClient.Get(ctx, typeNamespacedName, &updated)).To(Succeed())
 			Expect(updated.Status.Generated).To(ContainElement("Service/default/test-resource-kreg"))
+		})
+
+		It("prunes a stale EndpointSlice when a previously-selected candidate is withdrawn", func() {
+			controllerReconciler := &BGPBackendPolicyReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Snapshot: fakeSnapshotSource{candidates: []pipeline.BackendCandidate{
+					{Prefix: "198.51.100.10/32", ClusterID: "atl-1"},
+					{Prefix: "198.51.100.20/32", ClusterID: "atl-2"},
+				}},
+				Driver: noopDriver{},
+			}
+
+			By("reconciling with two candidates")
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			listOpts := []client.ListOption{
+				client.InNamespace(resourceNamespace),
+				client.MatchingLabels{kregreconcile.ManagedByLabel: resourceName},
+			}
+			var slices discoveryv1.EndpointSliceList
+			Expect(k8sClient.List(ctx, &slices, listOpts...)).To(Succeed())
+			Expect(slices.Items).To(HaveLen(2))
+
+			By("reconciling again with atl-2 withdrawn")
+			controllerReconciler.Snapshot = fakeSnapshotSource{candidates: []pipeline.BackendCandidate{
+				{Prefix: "198.51.100.10/32", ClusterID: "atl-1"},
+			}}
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("pruning the withdrawn candidate's EndpointSlice")
+			Expect(k8sClient.List(ctx, &slices, listOpts...)).To(Succeed())
+			Expect(slices.Items).To(HaveLen(1))
+			Expect(slices.Items[0].Name).To(Equal("test-resource-kreg-atl-1"))
 		})
 	})
 })
