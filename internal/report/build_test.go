@@ -143,6 +143,21 @@ var _ = Describe("BuildAdvertisedBackends", func() {
 		Expect(stability.PendingSince).To(BeNil())
 	})
 
+	It("leaves LastObservedAt nil rather than a bogus year-0001 timestamp when Damping's is zero-valued", func() {
+		// PriorStateFromAdvertisedBackends uses LastObservedAt being nil
+		// as its sentinel for "never evaluated by Damp" -- a non-nil
+		// zero-time here would incorrectly look like a real evaluation
+		// happened.
+		candidate := docCandidate()
+		candidate.Damping = &pipeline.DampingInfo{
+			State: kregv1alpha1.BackendStateDampened,
+			// LastObservedAt deliberately left zero-valued.
+		}
+
+		backends := report.BuildAdvertisedBackends([]pipeline.BackendCandidate{candidate}, nil)
+		Expect(backends[0].Status.Stability.LastObservedAt).To(BeNil())
+	})
+
 	It("clamps an out-of-int32-range score instead of overflowing on cast", func() {
 		candidate := docCandidate()
 		candidate.Damping = &pipeline.DampingInfo{

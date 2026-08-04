@@ -100,8 +100,15 @@ func buildOne(c pipeline.BackendCandidate, policies []kregv1alpha1.BGPBackendPol
 
 // metaTime and metaTimeOrNil convert internal/pipeline.DampingInfo's
 // plain time.Time fields to the *metav1.Time AdvertisedBackendStatus
-// needs.
+// needs. metaTime treats the zero value as unset (nil) rather than a
+// literal year-0001 timestamp: PriorStateFromAdvertisedBackends uses
+// LastObservedAt being nil as its sentinel for "never evaluated by
+// Damp", so a bogus non-nil zero-time would incorrectly look like a
+// real evaluation happened.
 func metaTime(t time.Time) *metav1.Time {
+	if t.IsZero() {
+		return nil
+	}
 	mt := metav1.NewTime(t)
 	return &mt
 }
