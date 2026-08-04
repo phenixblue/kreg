@@ -321,9 +321,11 @@ status:
 
 ### 2.6 `BGPGatewayClassConfig` — optional, cluster-scoped
 
-Defaults so every `BGPBackendPolicy` doesn't restate the same stability and
-health blocks. Merge semantics: policy overrides class, class overrides
-built-in defaults.
+Defaults so every `BGPBackendPolicy` doesn't restate the same
+`activeHealth`/`outlierDetection` blocks. Merge semantics: policy overrides
+class, class overrides built-in defaults. `stability` isn't part of this —
+it's a single cluster-wide `BGPStabilityConfig` (§2.4), not per-policy or
+per-class.
 
 ---
 

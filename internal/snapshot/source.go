@@ -112,12 +112,35 @@ func (s *Source) Snapshot(ctx context.Context) ([]pipeline.BackendCandidate, err
 		return nil, fmt.Errorf("get BGPStabilityConfig %q: %w", stabilityConfigName, err)
 	}
 
-	var existing kregv1alpha1.AdvertisedBackendList
-	if err := s.Client.List(ctx, &existing,
-		client.MatchingLabels{reconcile.ManagedByLabel: report.ManagedByValue}); err != nil {
-		return nil, fmt.Errorf("list AdvertisedBackends: %w", err)
+	prior := map[string]damp.PriorState{}
+	if needsPriorState(stabilityConfig.Spec) {
+		var existing kregv1alpha1.AdvertisedBackendList
+		if err := s.Client.List(ctx, &existing,
+			client.MatchingLabels{reconcile.ManagedByLabel: report.ManagedByValue}); err != nil {
+			return nil, fmt.Errorf("list AdvertisedBackends: %w", err)
+		}
+		prior = damp.PriorStateFromAdvertisedBackends(existing.Items)
 	}
-	prior := damp.PriorStateFromAdvertisedBackends(existing.Items)
 
 	return s.Damper.Evaluate(time.Now(), candidates, prior, stabilityConfig.Spec), nil
+}
+
+// needsPriorState reports whether spec can ever make Evaluate behave
+// differently depending on a candidate's prior state. When
+// withdrawalGrace and additionDelay are both unset/zero and dampening is
+// disabled, every code path in ewma.Damper.Evaluate that consults prior
+// state resolves the same way regardless of what's in it (grace <= 0
+// means a withdrawn candidate is never synthesized even with a real
+// prior; a disabled/absent dampening config never suppresses regardless
+// of accumulated score) — so listing AdvertisedBackends cluster-wide on
+// every tick just to build a prior map Evaluate would ignore is pure
+// overhead, and skipped.
+func needsPriorState(spec kregv1alpha1.BGPStabilityConfigSpec) bool {
+	if spec.WithdrawalGrace != nil && spec.WithdrawalGrace.Duration > 0 {
+		return true
+	}
+	if spec.AdditionDelay != nil && spec.AdditionDelay.Duration > 0 {
+		return true
+	}
+	return spec.Dampening != nil && spec.Dampening.Enabled
 }
