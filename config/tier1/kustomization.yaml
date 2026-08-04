@@ -1,0 +1,27 @@
+# Deploy overlay for the Tier 1 test rig (docs/design/architecture.md
+# §5 / hack/tier1). Deliberately a separate namespace from config/default
+# (kreg-system), which the formal e2e suite (test/e2e) enforces the
+# `restricted` PodSecurity profile on — this overlay needs hostNetwork
+# for the ExaBGP containers on the kind Docker network to reach the
+# controller's BGP listener, which `restricted` forbids.
+namespace: kreg-tier1
+
+resources:
+- ../default
+
+images:
+- name: controller
+  newName: kreg-controller
+  newTag: tier1
+
+patches:
+- target:
+    kind: Deployment
+    name: controller-manager
+  patch: |-
+    - op: add
+      path: /spec/template/spec/hostNetwork
+      value: true
+    - op: add
+      path: /spec/template/spec/dnsPolicy
+      value: ClusterFirstWithHostNet

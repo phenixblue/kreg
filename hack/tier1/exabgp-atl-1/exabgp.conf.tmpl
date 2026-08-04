@@ -1,0 +1,19 @@
+# Templated by hack/tier1/up.sh — __KREG_NODE_IP__ and __LOCAL_ADDR__ are
+# substituted at run time (the kind Docker network's subnet isn't fixed
+# across machines/reinstalls, so neither address can be hardcoded).
+process announce-routes {
+    run /scripts/announce.sh;
+    encoder text;
+}
+
+neighbor __KREG_NODE_IP__ {
+    router-id 10.0.10.1;
+    local-address __LOCAL_ADDR__;
+    local-as 4200000000;
+    peer-as 4200000000;
+    connect 1790;
+
+    api {
+        processes [announce-routes];
+    }
+}

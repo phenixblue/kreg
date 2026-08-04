@@ -175,6 +175,14 @@ deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -
 
+.PHONY: tier1-up
+tier1-up: manifests kustomize ## Stand up the Tier 1 test rig (kind + Istio + real ExaBGP speakers). See hack/tier1/README.md.
+	hack/tier1/up.sh
+
+.PHONY: tier1-down
+tier1-down: ## Tear down the Tier 1 test rig. Leaves the kind cluster, Istio, and CRDs in place.
+	hack/tier1/down.sh
+
 ##@ Dependencies
 
 ## Location to install dependencies to
