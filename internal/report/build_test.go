@@ -155,6 +155,21 @@ var _ = Describe("BuildAdvertisedBackends", func() {
 		Expect(backends[0].Status.Stability.DampeningPenalty).To(Equal(int32(math.MaxInt32)))
 	})
 
+	It("maps a NaN score to zero instead of an implementation-defined cast", func() {
+		// NaN compares false against every bound, so it would otherwise
+		// slip past clampToInt32's range checks untouched into
+		// int32(NaN) -- unspecified by the Go spec.
+		candidate := docCandidate()
+		candidate.Damping = &pipeline.DampingInfo{
+			State:          kregv1alpha1.BackendStateDampened,
+			Score:          math.NaN(),
+			LastObservedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		}
+
+		backends := report.BuildAdvertisedBackends([]pipeline.BackendCandidate{candidate}, nil)
+		Expect(backends[0].Status.Stability.DampeningPenalty).To(Equal(int32(0)))
+	})
+
 	It("leaves Damping-derived status fields zero when Damping is nil", func() {
 		// The state Damp never evaluates a candidate at all -- e.g. an
 		// Authorize-rejected route.

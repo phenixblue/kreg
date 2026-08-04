@@ -116,11 +116,16 @@ func metaTimeOrNil(t *time.Time) *metav1.Time {
 // clampToInt32 rounds and clamps a damping score into int32's range
 // before it's persisted as DampeningPenalty. Go's float->int conversion
 // is implementation-specific once the value is out of the target type's
-// range — a corrupted penalty would then feed back into the next tick's
-// Score via PriorStateFromAdvertisedBackends, so this must never
-// silently wrap or produce garbage, however unlikely an actual overflow
-// is given maxSuppress already forces a periodic reset.
+// range (or NaN, which compares false against every bound and so would
+// otherwise slip past the range checks below untouched) — a corrupted
+// penalty would then feed back into the next tick's Score via
+// PriorStateFromAdvertisedBackends, so this must never silently wrap or
+// produce garbage, however unlikely an actual overflow or NaN score is
+// in practice given maxSuppress already forces a periodic reset.
 func clampToInt32(f float64) int32 {
+	if math.IsNaN(f) {
+		return 0
+	}
 	rounded := math.Round(f)
 	switch {
 	case rounded > math.MaxInt32:
