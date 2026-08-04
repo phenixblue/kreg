@@ -128,4 +128,15 @@ var _ = Describe("AdvertisedBackend Controller", func() {
 		err = k8sClient.Get(ctx, types.NamespacedName{Name: "203-0-113-5-32-unattributed"}, &rejectedBackend)
 		Expect(apierrors.IsNotFound(err)).To(BeTrue())
 	})
+
+	It("enqueueGlobalSweep triggers a reconcile regardless of which BGPBackendPolicy changed", func() {
+		// BoundPolicies/GeneratedResources depend on every BGPBackendPolicy,
+		// so any change to any one of them must wake the reconciler — it
+		// always recomputes the whole view, so the request's identity
+		// doesn't matter, only that one is enqueued at all.
+		reqs := enqueueGlobalSweep(ctx, &kregv1alpha1.BGPBackendPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "any-policy", Namespace: "any-namespace"},
+		})
+		Expect(reqs).To(Equal([]reconcile.Request{{}}))
+	})
 })

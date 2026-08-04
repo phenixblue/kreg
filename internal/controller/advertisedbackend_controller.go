@@ -27,8 +27,10 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kregv1alpha1 "github.com/phenixblue/kreg/api/v1alpha1"
 	"github.com/phenixblue/kreg/internal/report"
@@ -149,10 +151,22 @@ func (r *AdvertisedBackendReconciler) pruneStaleBackends(ctx context.Context, de
 	return nil
 }
 
+// enqueueGlobalSweep triggers a reconcile regardless of which object
+// changed — Reconcile ignores request identity and always recomputes the
+// whole view, so any request value works as the trigger.
+func enqueueGlobalSweep(context.Context, client.Object) []reconcile.Request {
+	return []reconcile.Request{{}}
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *AdvertisedBackendReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kregv1alpha1.BGPPeerConfig{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		// BoundPolicies/GeneratedResources depend on every BGPBackendPolicy,
+		// not just BGPPeerConfig — without this, a policy create/update/delete
+		// wouldn't be reflected until the next snapshotPollInterval sweep.
+		Watches(&kregv1alpha1.BGPBackendPolicy{}, handler.EnqueueRequestsFromMapFunc(enqueueGlobalSweep),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Named("advertisedbackend").
 		Complete(r)
 }
