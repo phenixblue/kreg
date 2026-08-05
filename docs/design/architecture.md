@@ -85,6 +85,116 @@ an aggregate from ingress-gateway health rather than trusting workload
 clusters to always announce correctly), it's a new, explicitly-scoped
 capability with its own failure-mode analysis — not an extension of ingest.
 
+### Detailed topology
+
+The ASCII sketch above is the one-glance version. This is the same system
+end to end: every hop client traffic actually takes, every hop BGP control
+state takes, and where the line between control plane and data plane
+actually falls. ATL is drawn in full; SJC (and every PoP beyond it — this
+pattern repeats per-region, that's the whole point of "Session scaling"
+above) mirrors it exactly, collapsed here so the diagram stays readable.
+
+```mermaid
+flowchart TB
+    classDef ext fill:#eeeeee,stroke:#888888,color:#111111
+    classDef cp fill:#dbe9fb,stroke:#2a5db0,color:#0b2545
+    classDef dp fill:#fbe4cf,stroke:#c1631a,color:#4a2600
+    classDef k8s fill:#e2f3da,stroke:#3f8f2f,color:#173d10
+
+    Client["Client traffic"]:::ext
+    Edge["Edge / transit / IXP<br/>announces 198.51.100.0/24<br/>as anycast from every PoP"]:::ext
+    Operator["Operator"]:::ext
+    MorePoPs["… additional PoPs,<br/>same pattern"]:::ext
+
+    Client -->|"data-plane request"| Edge
+    Edge -->|"ECMP by BGP best path"| ATL_GW
+    Edge -->|"ECMP by BGP best path"| SJC_GW
+    Edge -.->|"ECMP by BGP best path"| MorePoPs
+
+    subgraph RRFabric["Route reflectors — BIRD 2.x / FRR, one pair per region"]
+        RR["RR pair"]:::cp
+    end
+
+    subgraph WLA["Workload cluster A — Calico/BIRD"]
+        direction TB
+        WLA_BGP["CNI BGP speaker<br/>originates svc VIP /32s<br/>+ large communities"]:::cp
+        WLA_Svc["Backend pods / Services"]:::dp
+    end
+    subgraph WLB["Workload cluster B — Cilium/GoBGP"]
+        direction TB
+        WLB_BGP["CNI BGP speaker"]:::cp
+        WLB_Svc["Backend pods / Services"]:::dp
+    end
+
+    WLA_BGP -->|"iBGP:<br/>VIP + communities"| RR
+    WLB_BGP -->|"iBGP:<br/>VIP + communities"| RR
+
+    subgraph PoPATL["PoP: ATL — ingress cluster"]
+        direction TB
+        subgraph ATL_CP["Control plane — kreg-controller"]
+            direction TB
+            ATL_RIB["GoBGP RIB<br/>embedded, iBGP RR-client"]:::cp
+            ATL_Pipe["Ingest → Authorize → Normalize<br/>→ Damp → Reconcile → Report"]:::cp
+            ATL_RIB --> ATL_Pipe
+            ATL_CRDcfg["BGPPeerConfig · CommunityMap<br/>BGPBackendPolicy · BGPStabilityConfig"]:::k8s
+            ATL_CRDcfg -.->|"read every tick"| ATL_Pipe
+            ATL_Out["Service · EndpointSlice ·<br/>DestinationRule · AdvertisedBackend"]:::k8s
+            ATL_Pipe -->|"writes"| ATL_Out
+            ATL_Istiod["istiod"]:::cp
+            ATL_Out -->|"watched by"| ATL_Istiod
+        end
+        subgraph ATL_DP["Data plane"]
+            ATL_GW["Istio ingress GW — Envoy"]:::dp
+        end
+        ATL_Istiod -->|"xDS push"| ATL_GW
+    end
+
+    RR -->|"iBGP RR-client,<br/>reflected routes"| ATL_RIB
+    RR -->|"iBGP RR-client,<br/>reflected routes"| SJC_RIB
+
+    ATL_GW -->|"direct connection over the<br/>underlay's own routing —<br/>data plane, never via kreg-controller"| WLA_Svc
+    ATL_GW -->|"direct connection<br/>over the underlay"| WLB_Svc
+
+    subgraph PoPSJC["PoP: SJC — ingress cluster, mirrors ATL"]
+        direction TB
+        SJC_RIB["GoBGP RIB"]:::cp
+        SJC_Rest["kreg-controller pipeline<br/>+ istiod"]:::cp
+        SJC_GW["Istio ingress GW — Envoy"]:::dp
+        SJC_RIB --> SJC_Rest --> SJC_GW
+    end
+
+    SJC_GW -->|"direct connection<br/>over the underlay"| WLA_Svc
+    SJC_GW -->|"direct connection<br/>over the underlay"| WLB_Svc
+
+    Operator -->|"kubectl apply"| ATL_CRDcfg
+
+    subgraph Legend["Legend"]
+        direction LR
+        L1["Control plane"]:::cp
+        L2["Data plane"]:::dp
+        L3["Kubernetes API objects"]:::k8s
+        L4["External"]:::ext
+    end
+```
+
+Three things this makes explicit that the sketch above doesn't:
+
+- **The data plane never touches kreg-controller.** Envoy's connection to a
+  workload cluster's VIP is ordinary IP routing over the same underlay the
+  BGP fabric maintains — real routers forward those packets. kreg-controller
+  reads the control-plane state that fabric carries; it doesn't sit on the
+  forwarding path for a single packet.
+- **`AdvertisedBackend`/`Service`/`EndpointSlice`/`DestinationRule` are the
+  entire interface between kreg-controller and istiod.** istiod never talks
+  BGP, and kreg-controller never talks xDS — the Kubernetes API is the only
+  coupling, which is what lets a second driver (Envoy Gateway, §7) or a
+  second Gateway API implementation swap in without touching the BGP side at
+  all.
+- **Every PoP runs the full pipeline independently** — its own GoBGP RIB, its
+  own `Ingest`→`Report` chain, its own `istiod`. §4's "split brain between
+  PoPs is fine and expected" isn't a caveat bolted onto a shared system; it's
+  what the topology already looks like.
+
 ### Pipeline stages
 
 | Stage | Responsibility | Notes |
