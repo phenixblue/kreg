@@ -59,6 +59,32 @@ aggregate (a `/24` minimum for IPv4, `/48` for IPv6) is announced to transit.
 This is what keeps you inside provider prefix limits and out of global-table
 filters.
 
+**Route origination: not KREG's job.** Workload clusters'
+own CNI BGP speakers (Calico, Cilium, kube-router — see the diagram) originate
+the per-service `/32`s; route reflectors reflect them; KREG only ever
+*ingests*. The controller never announces a route of its own — not the
+anycast aggregate, not a synthesized route based on Envoy/application health,
+nothing. Two reasons, both load-bearing:
+
+- It would put Kubernetes/application state in a position to directly
+  influence the BGP control plane's reachability decisions across an entire
+  anycast fabric, not just local config — precisely the boundary the one-line
+  scope statement above draws ("generates config, never in the packet path").
+  A health-check flap turning into a route flap is a fundamentally worse
+  failure mode than a health-check flap turning into an xDS update, because
+  the blast radius stops being one cluster's data plane and starts being
+  every PoP's routing table.
+- §4's failure semantics ("controller down → nothing breaks... you lose the
+  ability to *change* routing, not the ability to *serve*") depend on KREG
+  being strictly downstream of BGP reachability. An originating KREG would be
+  upstream of it for whatever it originates, and that guarantee stops holding
+  for those routes specifically.
+
+If a future need genuinely requires KREG-originated routes (e.g. synthesizing
+an aggregate from ingress-gateway health rather than trusting workload
+clusters to always announce correctly), it's a new, explicitly-scoped
+capability with its own failure-mode analysis — not an extension of ingest.
+
 ### Pipeline stages
 
 | Stage | Responsibility | Notes |
@@ -169,6 +195,23 @@ spec:
 letting in-flight ones finish. Withdrawal is a hard signal. Giving operators
 both is worth the extra community.
 
+**`serviceTag`: community, not prefix position.** The alternative was
+encoding which logical service a VIP belongs to in the address structure
+itself — carving reserved sub-ranges or octet positions out of the prefix
+block per service, the way subnetting schemes encode meaning into address
+layout. Rejected: it welds two things together that should stay independent.
+Address assignment is IPAM's job; which service a VIP belongs to is a
+grouping decision that changes over time (a service gets renamed, split, or
+merged) — tying it to the address means a tag change means a renumber, and
+adding a second tagging dimension later means redesigning the carving scheme
+from scratch. It also means operators need a second mental model just for
+this one field, when `weight`/`tier`/`drain` already prove the community
+mechanism handles arbitrary route metadata without spending address space —
+`serviceTag` is just one more `CommunityMap` rule, decoded identically,
+drained identically, no separate tooling. BGP communities exist precisely so
+you don't have to encode metadata into addressing; using them here is using
+the tool for what it's for, not the exception.
+
 ### 2.3 `BGPBackendPolicy` — namespaced, policy attachment
 
 The DNSPolicy analogue. Targets a `Gateway` or `HTTPRoute` via
@@ -227,16 +270,20 @@ status:
     - DestinationRule/gateways/prod-web-kreg
 ```
 
-**`backend.tls.mode` roadmap.** `SIMPLE` is the v1 default: the reconciler
-attaches a `BackendTLSPolicy` validating the backend's server cert against
-`credentialRef`, no client cert asserted. `Passthrough` is the fast-follow —
-the reconciler emits a `TLSRoute` (SNI-routed, un-terminated) instead of
-`HTTPRoute` + `Service`, so the gateway never holds key material for that
-backend at all; the tradeoff is losing HTTP-level routing and
-`outlierDetection.consecutive5xx` for that policy, so it's opt-in per
-`BGPBackendPolicy`, not a global switch. `Mutual` — the gateway also asserts
-a client cert, verified by the backend — is deferred until a real
-regulatory-boundary deployment justifies the added PKI.
+**`backend.tls.mode` roadmap.** Three modes, shipped in order of how much
+trust each one asks the gateway to hold, not built together: each is a
+strictly bigger PKI/architecture commitment than the last, and there's no
+deployment that needs `Mutual` without first having proven out `SIMPLE`.
+`SIMPLE` is the v1 default: the reconciler attaches a `BackendTLSPolicy`
+validating the backend's server cert against `credentialRef`, no client cert
+asserted. `Passthrough` is the fast-follow — the reconciler emits a
+`TLSRoute` (SNI-routed, un-terminated) instead of `HTTPRoute` + `Service`, so
+the gateway never holds key material for that backend at all; the tradeoff
+is losing HTTP-level routing and `outlierDetection.consecutive5xx` for that
+policy, so it's opt-in per `BGPBackendPolicy`, not a global switch. `Mutual`
+— the gateway also asserts a client cert, verified by the backend — is
+deferred until a real regulatory-boundary deployment justifies the added
+PKI.
 
 ### 2.4 `BGPStabilityConfig` — cluster-scoped, reusable
 
@@ -264,15 +311,56 @@ spec:
     maxSuppress: 30m              # hard cap regardless of score
 ```
 
-The dampening algorithm — an exponentially-decaying instability score,
-bumped on each flap and decayed against real elapsed time — sits behind
-an internal interface (`internal/damp.Damper`), not a user-selectable
-field here: `halfLife`/`suppressThreshold`/`reuseThreshold`/`maxSuppress`
-describe its tunable behavior, not its implementation, so a second
-algorithm can replace the first without an API change. A cluster with no
-`BGPStabilityConfig` yet is a valid, unremarkable state: hold-down grace
-and addition delay default to none, dampening defaults to disabled — the
-same behavior as before the Damper existed.
+**Algorithm choice: EWMA, not classic RFC 2439 penalty decay.** Four shapes
+were on the table:
+
+- **RFC 2439-style penalty decay** — the field names above (`halfLife`,
+  `suppressThreshold`, `reuseThreshold`, `maxSuppress`) are its vocabulary,
+  and it's the obvious default for anything calling itself "BGP flap
+  dampening." The problem: classic flap damping earned a real bad
+  reputation in production networks, and RFC 7196 (2014) recommends against
+  enabling it on eBGP sessions at all — path-hunting during a single
+  upstream event can look like many flaps to a downstream observer,
+  over-penalizing routes that were never actually unstable and turning a
+  transient event into extended suppression. The mitigating factor here is
+  that KREG dampens at one RR-facing edge inside a single org's iBGP, not
+  across ASes, so the path-hunting amplification that made this toxic on the
+  internet mostly doesn't apply — but it's still borrowing a discredited
+  algorithm's math, and worth being honest that the reputation comes
+  attached.
+- **Fixed/sliding-window counter** — count transitions in a trailing window,
+  dampen past N. Trivial to explain and debug ("flapped 6 times in the last
+  hour" needs no unit conversion), but a fixed window has a hard edge: a
+  route that flapped 3 times 23h59m ago instantly looks healthy the moment
+  the window rolls, with nothing having actually changed.
+- **Debounce/hysteresis state machine** — require N consecutive transitions
+  to enter `Dampened`, M consecutive stable ticks to leave it. Simplest to
+  implement correctly, and the *only* one of the four with built-in
+  protection against the dampener oscillating itself — but the least
+  principled: N and M are arbitrary knobs with no decay curve behind them,
+  tuned by trial and error rather than derived from a model.
+- **EWMA (chosen)** — same recency-weighted decay behavior as RFC 2439
+  penalty math, but evaluated once per Damp tick and decayed against the
+  real elapsed time since the last tick rather than an assumed fixed
+  interval, so it rides the reconciler's existing poll cadence instead of
+  needing its own continuous clock. Keeps the recency-weighting property
+  that makes penalty decay worth having in the first place, without
+  carrying quite as much of classic flap damping's specific baggage.
+
+`AdvertisedBackend.status.stability` shipping both `flapCount24h` (a simple
+count, for at-a-glance debugging) and `dampeningPenalty` (the decaying score
+that actually drives suppression) reflects this directly: report the count
+because it's what a human reads first, drive behavior off the decayed score
+because that's the part with real recency-weighting.
+
+The algorithm itself — bumped on each flap and decayed against real
+elapsed time — sits behind an internal interface (`internal/damp.Damper`),
+not a user-selectable field here: `halfLife`/`suppressThreshold`/
+`reuseThreshold`/`maxSuppress` describe its tunable behavior, not its
+implementation, so a second algorithm can replace the first without an API
+change. A cluster with no `BGPStabilityConfig` yet is a valid, unremarkable
+state: hold-down grace and addition delay default to none, dampening
+defaults to disabled — the same behavior as before the Damper existed.
 
 ### 2.5 `AdvertisedBackend` — cluster-scoped, controller-written, read-only
 
