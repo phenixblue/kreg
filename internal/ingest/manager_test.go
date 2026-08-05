@@ -172,6 +172,42 @@ var _ = Describe("Manager", func() {
 		Expect(statuses[0].SessionState).To(Equal(kregv1alpha1.PeerSessionStateEstablished))
 	})
 
+	It("does not thrash an already-established session on a repeat Reconfigure with an address:port peer", func() {
+		// Regression: Reconfigure used to key its existing/desired diff by
+		// the raw peer.Address (which may include ":port" — the loopback
+		// tests above use exactly that form), while GoBGP's ListPeer
+		// reports host-only NeighborAddress. The mismatch made every
+		// reconcile treat the peer as brand new, deleting and re-adding
+		// it — briefly dropping the session — even when nothing changed.
+		Consistently(func() (kregv1alpha1.PeerSessionState, error) {
+			statuses, err := kreg.Status(ctx)
+			if err != nil || len(statuses) == 0 {
+				return "", err
+			}
+			return statuses[0].SessionState, nil
+		}, 2*time.Second, 100*time.Millisecond).Should(Equal(kregv1alpha1.PeerSessionStateEstablished))
+
+		const asn = 4200000000
+		Expect(kreg.Reconfigure(ctx, &kregv1alpha1.BGPPeerConfigSpec{
+			LocalASN:   asn,
+			RouterID:   "10.0.0.1",
+			ListenPort: ptrInt32(17900),
+			Peers: []kregv1alpha1.BGPPeer{{
+				Name:      "speaker",
+				Address:   "127.0.0.1:17901",
+				RemoteASN: asn,
+			}},
+		}, nil)).To(Succeed())
+
+		Consistently(func() (kregv1alpha1.PeerSessionState, error) {
+			statuses, err := kreg.Status(ctx)
+			if err != nil || len(statuses) == 0 {
+				return "", err
+			}
+			return statuses[0].SessionState, nil
+		}, 2*time.Second, 100*time.Millisecond).Should(Equal(kregv1alpha1.PeerSessionStateEstablished))
+	})
+
 	Describe("toAPIPeer", func() {
 		// Unit-level, not a live session: GoBGP's TCP-MD5 socket option
 		// (RFC 2385) is Linux-only — darwin's setTcpMD5SigSockopt always

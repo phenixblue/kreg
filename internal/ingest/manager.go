@@ -92,9 +92,16 @@ func (m *Manager) Reconfigure(ctx context.Context, spec *kregv1alpha1.BGPPeerCon
 
 	desired := map[string]bool{}
 	for _, peer := range spec.Peers {
-		desired[peer.Address] = true
+		// existing is keyed by GoBGP's own NeighborAddress, which is
+		// always host-only (toAPIPeer strips any ":port" suffix into
+		// Transport.RemotePort) — key desired the same way, or a peer
+		// configured with the ":port" form (non-standard deployments,
+		// loopback tests) would never match its existing entry and get
+		// deleted-then-re-added on every reconcile.
+		host, _ := splitHostPort(peer.Address)
+		desired[host] = true
 		apiPeer := toAPIPeer(peer, passwords[peer.Name])
-		if existing[peer.Address] {
+		if existing[host] {
 			if _, err := m.server.UpdatePeer(ctx, &api.UpdatePeerRequest{Peer: apiPeer}); err != nil {
 				return fmt.Errorf("update peer %s: %w", peer.Name, err)
 			}

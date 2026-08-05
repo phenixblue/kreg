@@ -182,6 +182,26 @@ var _ = Describe("BGPPeerConfig Controller", func() {
 				})
 				Expect(err).To(HaveOccurred())
 			})
+
+			It("fails fast with a clear error when Namespace is unset and a peer needs auth", func() {
+				setAuthRef(secretName)
+
+				controllerReconciler := &BGPPeerConfigReconciler{
+					Client: k8sClient,
+					Scheme: k8sClient.Scheme(),
+					// Namespace deliberately left unset — this must not
+					// fall through to an API-server error about an empty
+					// namespace, which would leave no clue that
+					// POD_NAMESPACE is what's actually missing.
+					Manager: &fakePeerManager{},
+				}
+
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: typeNamespacedName,
+				})
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("POD_NAMESPACE"))
+			})
 		})
 	})
 })

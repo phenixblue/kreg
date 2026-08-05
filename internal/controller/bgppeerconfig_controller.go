@@ -138,6 +138,9 @@ func (r *BGPPeerConfigReconciler) resolvePasswords(ctx context.Context, peers []
 		if peer.Auth == nil || peer.Auth.TCPMD5SecretRef == nil {
 			continue
 		}
+		if r.Namespace == "" {
+			return nil, fmt.Errorf("peer %s: tcpMD5SecretRef is set but no namespace is configured to resolve it against (POD_NAMESPACE not set?)", peer.Name)
+		}
 		ref := peer.Auth.TCPMD5SecretRef
 		optional := ref.Optional != nil && *ref.Optional
 
