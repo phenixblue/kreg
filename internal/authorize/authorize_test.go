@@ -26,10 +26,14 @@ import (
 )
 
 const (
-	atl1        = "atl-1"
-	usEast      = "us-east"
-	usEastAtlA  = "us-east-atl-a"
-	atl1Address = "198.51.100.10/32"
+	atl1         = "atl-1"
+	usEast       = "us-east"
+	usEastAtlA   = "us-east-atl-a"
+	rrAtlA       = "rr-atl-a"
+	atl1Address  = "198.51.100.10/32"
+	atl1Address2 = "198.51.100.11/32"
+	atl1Address3 = "198.51.100.12/32"
+	atl2Address  = "198.51.100.70/32"
 )
 
 // docBindings mirrors the ClusterBinding worked example in
@@ -51,20 +55,20 @@ func docBindings() []kregv1alpha1.ClusterBinding {
 
 var _ = Describe("Authorize", func() {
 	It("attributes a route to the binding whose allowedPrefixes contains it", func() {
-		routes := []pipeline.RIBRoute{{Prefix: atl1Address, Peer: "rr-atl-a"}}
+		routes := []pipeline.RIBRoute{{Prefix: atl1Address, Peer: rrAtlA}}
 
 		authorized, err := authorize.Authorize(routes, docBindings())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(authorized).To(HaveLen(1))
 		Expect(authorized[0].ClusterID).To(Equal(atl1))
 		Expect(authorized[0].Locality).To(Equal(pipeline.Locality{Region: usEast, Zone: usEastAtlA}))
-		Expect(authorized[0].Peer).To(Equal("rr-atl-a")) // untouched fields survive
+		Expect(authorized[0].Peer).To(Equal(rrAtlA)) // untouched fields survive
 	})
 
 	It("attributes adjacent bindings independently", func() {
 		routes := []pipeline.RIBRoute{
-			{Prefix: atl1Address},        // in atl-1's /26
-			{Prefix: "198.51.100.70/32"}, // in atl-2's /26
+			{Prefix: atl1Address}, // in atl-1's /26
+			{Prefix: atl2Address}, // in atl-2's /26
 		}
 
 		authorized, err := authorize.Authorize(routes, docBindings())
@@ -106,8 +110,8 @@ var _ = Describe("Authorize", func() {
 		// A route that (however it happened) already carries a ClusterID
 		// from ingest must not be trusted — only allowedPrefixes decides.
 		routes := []pipeline.RIBRoute{{
-			Prefix:    "198.51.100.70/32", // actually atl-2's range
-			ClusterID: atl1,               // asserted, wrong
+			Prefix:    atl2Address, // actually atl-2's range
+			ClusterID: atl1,        // asserted, wrong
 		}}
 
 		authorized, err := authorize.Authorize(routes, docBindings())
@@ -141,5 +145,112 @@ var _ = Describe("Authorize", func() {
 
 		_, err := authorize.Authorize(routes, bindings)
 		Expect(err).To(HaveOccurred())
+	})
+
+	Describe("maxPrefixes", func() {
+		maxPrefixesBindings := func(max int32) []kregv1alpha1.ClusterBinding {
+			bindings := docBindings()
+			bindings[0].MaxPrefixes = &max
+			return bindings
+		}
+
+		It("leaves a binding unlimited when maxPrefixes is unset", func() {
+			routes := []pipeline.RIBRoute{
+				{Prefix: atl1Address},
+				{Prefix: atl1Address2},
+				{Prefix: atl1Address3},
+			}
+
+			authorized, err := authorize.Authorize(routes, docBindings())
+			Expect(err).NotTo(HaveOccurred())
+			for _, r := range authorized {
+				Expect(r.Rejected).To(BeFalse())
+			}
+		})
+
+		It("keeps every route when the binding is exactly at its maxPrefixes cap", func() {
+			routes := []pipeline.RIBRoute{
+				{Prefix: atl1Address},
+				{Prefix: atl1Address2},
+			}
+
+			authorized, err := authorize.Authorize(routes, maxPrefixesBindings(2))
+			Expect(err).NotTo(HaveOccurred())
+			for _, r := range authorized {
+				Expect(r.Rejected).To(BeFalse())
+			}
+		})
+
+		It("fails closed on the excess routes, deterministically, without touching the session", func() {
+			// Deliberately out of prefix order, to prove selection is by
+			// sorted Prefix, not RIB iteration order.
+			routes := []pipeline.RIBRoute{
+				{Prefix: atl1Address3, Peer: rrAtlA},
+				{Prefix: atl1Address, Peer: rrAtlA},
+				{Prefix: atl1Address2, Peer: rrAtlA},
+			}
+
+			authorized, err := authorize.Authorize(routes, maxPrefixesBindings(2))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(authorized).To(HaveLen(3))
+
+			byPrefix := map[string]pipeline.RIBRoute{}
+			for _, r := range authorized {
+				byPrefix[r.Prefix] = r
+			}
+
+			Expect(byPrefix[atl1Address].Rejected).To(BeFalse())
+			Expect(byPrefix[atl1Address2].Rejected).To(BeFalse())
+
+			excess := byPrefix[atl1Address3]
+			Expect(excess.Rejected).To(BeTrue())
+			Expect(excess.Reason).NotTo(BeEmpty())
+			// Unlike an allowedPrefixes miss, attribution is known and
+			// legitimate here — only capacity is exceeded — so it stays
+			// visible via AdvertisedBackend rather than being cleared.
+			Expect(excess.ClusterID).To(Equal(atl1))
+			Expect(excess.Locality).To(Equal(pipeline.Locality{Region: usEast, Zone: usEastAtlA}))
+			// The peer session itself is untouched by this rejection.
+			Expect(excess.Peer).To(Equal(rrAtlA))
+		})
+
+		It("caps each binding independently", func() {
+			routes := []pipeline.RIBRoute{
+				{Prefix: atl1Address},  // atl-1
+				{Prefix: atl1Address2}, // atl-1, over cap
+				{Prefix: atl2Address},  // atl-2, uncapped
+			}
+
+			authorized, err := authorize.Authorize(routes, maxPrefixesBindings(1))
+			Expect(err).NotTo(HaveOccurred())
+
+			byPrefix := map[string]pipeline.RIBRoute{}
+			for _, r := range authorized {
+				byPrefix[r.Prefix] = r
+			}
+			Expect(byPrefix[atl1Address].Rejected).To(BeFalse())
+			Expect(byPrefix[atl1Address2].Rejected).To(BeTrue())
+			Expect(byPrefix[atl2Address].Rejected).To(BeFalse())
+		})
+
+		It("does not panic and enforces no cap for a negative maxPrefixes", func() {
+			// CRD validation (+kubebuilder:validation:Minimum=0) rejects
+			// this going forward, but a stored object from before that
+			// validation existed must not crash Authorize —
+			// indices[*binding.MaxPrefixes:] would panic on a negative
+			// bound without the guard.
+			routes := []pipeline.RIBRoute{
+				{Prefix: atl1Address},
+				{Prefix: atl1Address2},
+			}
+
+			Expect(func() {
+				authorized, err := authorize.Authorize(routes, maxPrefixesBindings(-1))
+				Expect(err).NotTo(HaveOccurred())
+				for _, r := range authorized {
+					Expect(r.Rejected).To(BeFalse())
+				}
+			}).NotTo(Panic())
+		})
 	})
 })

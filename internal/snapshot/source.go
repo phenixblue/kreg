@@ -64,6 +64,13 @@ type Source struct {
 	Client client.Client
 	RIB    ingest.RIB
 	Damper damp.Damper
+
+	// Tracker carries Authorize's per-peer rejection counts to
+	// BGPPeerConfigReconciler, which owns PeerStatus.PrefixesRejected but
+	// runs as a separate reconcile loop that never calls Authorize
+	// itself. Optional — nil just means PrefixesRejected stays
+	// unreported, same as before this field existed.
+	Tracker *authorize.RejectionTracker
 }
 
 // Snapshot implements controller.SnapshotSource.
@@ -85,6 +92,18 @@ func (s *Source) Snapshot(ctx context.Context) ([]pipeline.BackendCandidate, err
 	authorized, err := authorize.Authorize(routes, bindings)
 	if err != nil {
 		return nil, fmt.Errorf("authorize: %w", err)
+	}
+	// Deliberately published as soon as it's known, not deferred until
+	// Snapshot as a whole succeeds: which routes Authorize rejected is a
+	// fact fully determined right here, independent of whether the
+	// CommunityMap/BGPStabilityConfig/AdvertisedBackend reads below
+	// happen to fail this tick. Withholding it until full success would
+	// leave PrefixesRejected frozen stale during exactly the periods an
+	// operator most wants current rejection data — any transient failure
+	// below just fails this Reconcile and requeues, so the next tick
+	// re-authorizes and republishes anyway.
+	if s.Tracker != nil {
+		s.Tracker.Set(authorize.RejectedCountsByPeer(authorized))
 	}
 
 	var communityMap kregv1alpha1.CommunityMap

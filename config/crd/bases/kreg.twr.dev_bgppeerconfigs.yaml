@@ -81,9 +81,17 @@ spec:
                       - zone
                       type: object
                     maxPrefixes:
-                      description: maxPrefixes tears down the session if the peer
-                        exceeds it.
+                      description: |-
+                        maxPrefixes caps how many prefixes this cluster may have accepted at
+                        once. It's a per-cluster budget, not a per-session one: through a
+                        route reflector, one physical peer session can carry multiple
+                        clusters' routes, distinguished only by which binding matched.
+                        Exceeding it fails closed on this cluster's excess routes only
+                        (flagged Rejected, same as an allowedPrefixes miss) — it does not
+                        tear down the shared session or affect any other cluster behind the
+                        same peer.
                       format: int32
+                      minimum: 0
                       type: integer
                   required:
                   - allowedPrefixes
@@ -116,7 +124,10 @@ spec:
                 - BMPCollector
                 type: string
               peers:
-                description: peers are the BGP sessions the controller establishes.
+                description: |-
+                  peers are the BGP sessions the controller establishes. name must be
+                  unique — it's the key used to resolve which peer a
+                  tcpMD5SecretRef-resolved password belongs to.
                 items:
                   description: BGPPeer is one BGP session the controller establishes.
                   properties:
@@ -187,6 +198,9 @@ spec:
                   - remoteASN
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               routerID:
                 description: routerID is the controller's BGP router ID.
                 type: string

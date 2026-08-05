@@ -21,7 +21,10 @@ import (
 	"fmt"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -29,13 +32,17 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	kregv1alpha1 "github.com/phenixblue/kreg/api/v1alpha1"
+	"github.com/phenixblue/kreg/internal/authorize"
 	"github.com/phenixblue/kreg/internal/ingest"
 )
 
 // PeerManager is the subset of *ingest.Manager this reconciler needs,
 // narrowed to an interface so tests don't need a real GoBGP server.
+// passwords carries each auth-configured peer's resolved TCP-MD5
+// password, keyed by peer Name — resolving the Secret is the
+// reconciler's job (it has the k8s client), not Manager's.
 type PeerManager interface {
-	Reconfigure(ctx context.Context, spec *kregv1alpha1.BGPPeerConfigSpec) error
+	Reconfigure(ctx context.Context, spec *kregv1alpha1.BGPPeerConfigSpec, passwords map[string]string) error
 	Status(ctx context.Context) ([]kregv1alpha1.PeerStatus, error)
 }
 
@@ -59,11 +66,26 @@ type BGPPeerConfigReconciler struct {
 	// per controller process (cmd/main.go) and share it with the
 	// BGPBackendPolicy snapshot source that reads its RIB.
 	Manager PeerManager
+
+	// Namespace is where BGPPeerAuth.tcpMD5SecretRef resolves against.
+	// BGPPeerConfig is cluster-scoped, so there's no "same namespace as
+	// the CR" to fall back on — secrets must live wherever the controller
+	// itself runs (cmd/main.go sets this from the downward-API
+	// POD_NAMESPACE env var). Only required if some peer actually sets an
+	// auth ref; harmless zero-value otherwise.
+	Namespace string
+
+	// Tracker supplies PeerStatus.PrefixesRejected — populated by
+	// snapshot.Source's separate reconcile loop, since that's where
+	// Authorize actually runs. Optional: nil just leaves
+	// PrefixesRejected unreported.
+	Tracker *authorize.RejectionTracker
 }
 
 // +kubebuilder:rbac:groups=kreg.twr.dev,resources=bgppeerconfigs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kreg.twr.dev,resources=bgppeerconfigs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=kreg.twr.dev,resources=bgppeerconfigs/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get,namespace=system
 
 // Reconcile converges the live BGP peer set to spec and reports observed
 // session state.
@@ -75,13 +97,23 @@ func (r *BGPPeerConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if err := r.Manager.Reconfigure(ctx, &peerConfig.Spec); err != nil {
+	passwords, err := r.resolvePasswords(ctx, peerConfig.Spec.Peers)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("resolve peer auth: %w", err)
+	}
+
+	if err := r.Manager.Reconfigure(ctx, &peerConfig.Spec, passwords); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconfigure: %w", err)
 	}
 
 	statuses, err := r.Manager.Status(ctx)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("status: %w", err)
+	}
+	if r.Tracker != nil {
+		for i := range statuses {
+			statuses[i].PrefixesRejected = r.Tracker.Get(statuses[i].Name)
+		}
 	}
 
 	peerConfig.Status.Peers = statuses
@@ -91,6 +123,67 @@ func (r *BGPPeerConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	log.Info("reconciled BGPPeerConfig", "peers", len(statuses))
 	return ctrl.Result{RequeueAfter: statusPollInterval}, nil
+}
+
+// resolvePasswords reads each auth-configured peer's TCP-MD5 password
+// from a Secret in r.Namespace, returning a peer-name -> plaintext
+// password map (peers with no Auth.TCPMD5SecretRef are simply absent
+// from it). A missing Secret or key is a hard error unless the ref is
+// marked Optional: a BGP session silently coming up unauthenticated
+// because its intended password couldn't be resolved would be a security
+// regression, not a degradation worth tolerating quietly.
+//
+// The returned map is keyed by peer.Name, which Reconfigure then looks
+// up per-peer to build each one's GoBGP config — so peers is required to
+// have unique names (+listType=map,+listMapKey=name on the CRD field
+// enforces that going forward); this stays defensive against any object
+// stored before that validation existed, where a duplicate name could
+// otherwise let one peer's password silently apply to another's session.
+func (r *BGPPeerConfigReconciler) resolvePasswords(ctx context.Context, peers []kregv1alpha1.BGPPeer) (map[string]string, error) {
+	passwords := map[string]string{}
+	seenNames := map[string]bool{}
+	for _, peer := range peers {
+		if seenNames[peer.Name] {
+			return nil, fmt.Errorf("duplicate peer name %q", peer.Name)
+		}
+		seenNames[peer.Name] = true
+
+		if peer.Auth == nil || peer.Auth.TCPMD5SecretRef == nil {
+			continue
+		}
+		if r.Namespace == "" {
+			return nil, fmt.Errorf("peer %s: tcpMD5SecretRef is set but no namespace is configured to resolve it against (POD_NAMESPACE not set?)", peer.Name)
+		}
+		ref := peer.Auth.TCPMD5SecretRef
+		if ref.Name == "" {
+			return nil, fmt.Errorf("peer %s: tcpMD5SecretRef.name is empty", peer.Name)
+		}
+		if ref.Key == "" {
+			return nil, fmt.Errorf("peer %s: tcpMD5SecretRef.key is empty", peer.Name)
+		}
+		optional := ref.Optional != nil && *ref.Optional
+
+		var secret corev1.Secret
+		if err := r.Get(ctx, types.NamespacedName{Namespace: r.Namespace, Name: ref.Name}, &secret); err != nil {
+			if apierrors.IsNotFound(err) && optional {
+				continue
+			}
+			if apierrors.IsNotFound(err) {
+				return nil, fmt.Errorf("peer %s: secret %s/%s not found", peer.Name, r.Namespace, ref.Name)
+			}
+			return nil, fmt.Errorf("peer %s: get secret %s/%s: %w", peer.Name, r.Namespace, ref.Name, err)
+		}
+
+		password, ok := secret.Data[ref.Key]
+		if !ok {
+			if optional {
+				continue
+			}
+			return nil, fmt.Errorf("peer %s: key %q not found in secret %s/%s", peer.Name, ref.Key, r.Namespace, ref.Name)
+		}
+		passwords[peer.Name] = string(password)
+	}
+	return passwords, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

@@ -59,8 +59,12 @@ type BGPPeerConfigSpec struct {
 	// +optional
 	Mode BGPPeerConfigMode `json:"mode,omitempty"`
 
-	// peers are the BGP sessions the controller establishes.
+	// peers are the BGP sessions the controller establishes. name must be
+	// unique — it's the key used to resolve which peer a
+	// tcpMD5SecretRef-resolved password belongs to.
 	// +optional
+	// +listType=map
+	// +listMapKey=name
 	Peers []BGPPeer `json:"peers,omitempty"`
 
 	// clusterBindings is the trust boundary: a peer may only originate
@@ -148,8 +152,16 @@ type ClusterBinding struct {
 	// +kubebuilder:validation:MinItems=1
 	AllowedPrefixes []string `json:"allowedPrefixes"`
 
-	// maxPrefixes tears down the session if the peer exceeds it.
+	// maxPrefixes caps how many prefixes this cluster may have accepted at
+	// once. It's a per-cluster budget, not a per-session one: through a
+	// route reflector, one physical peer session can carry multiple
+	// clusters' routes, distinguished only by which binding matched.
+	// Exceeding it fails closed on this cluster's excess routes only
+	// (flagged Rejected, same as an allowedPrefixes miss) — it does not
+	// tear down the shared session or affect any other cluster behind the
+	// same peer.
 	// +optional
+	// +kubebuilder:validation:Minimum=0
 	MaxPrefixes *int32 `json:"maxPrefixes,omitempty"`
 
 	// +required
