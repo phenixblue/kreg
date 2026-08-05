@@ -245,7 +245,8 @@ spec:
   clusterBindings:
     - clusterID: atl-1
       allowedPrefixes: ["198.51.100.0/26"]
-      maxPrefixes: 256                    # tear down session above this
+      maxPrefixes: 256                    # excess from this cluster fails
+                                           # closed; session unaffected
       locality: {region: us-east, zone: us-east-atl-a}
     - clusterID: atl-2
       allowedPrefixes: ["198.51.100.64/26"]

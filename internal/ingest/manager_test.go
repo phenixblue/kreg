@@ -113,7 +113,7 @@ var _ = Describe("Manager", func() {
 				Address:   "127.0.0.1:17901",
 				RemoteASN: asn,
 			}},
-		})).To(Succeed())
+		}, nil)).To(Succeed())
 
 		Expect(speaker.Reconfigure(ctx, &kregv1alpha1.BGPPeerConfigSpec{
 			LocalASN:   asn,
@@ -124,7 +124,7 @@ var _ = Describe("Manager", func() {
 				Address:   "127.0.0.1:17900",
 				RemoteASN: asn,
 			}},
-		})).To(Succeed())
+		}, nil)).To(Succeed())
 
 		Eventually(func() kregv1alpha1.PeerSessionState {
 			statuses, err := kreg.Status(ctx)
@@ -170,6 +170,30 @@ var _ = Describe("Manager", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(statuses).To(HaveLen(1))
 		Expect(statuses[0].SessionState).To(Equal(kregv1alpha1.PeerSessionStateEstablished))
+	})
+
+	Describe("toAPIPeer", func() {
+		// Unit-level, not a live session: GoBGP's TCP-MD5 socket option
+		// (RFC 2385) is Linux-only — darwin's setTcpMD5SigSockopt always
+		// errors "not supported" — so a real loopback MD5 session can't be
+		// exercised portably here. Live wire-level verification happens
+		// against the Tier 1 rig's real Linux containers instead; this
+		// just confirms the resolved password reaches GoBGP's peer config.
+		peer := kregv1alpha1.BGPPeer{
+			Name:      "rr-atl-a",
+			Address:   "10.0.10.1",
+			RemoteASN: 4200000000,
+		}
+
+		It("sets AuthPassword when a password is resolved for this peer", func() {
+			apiPeer := toAPIPeer(peer, "s3cr3t")
+			Expect(apiPeer.Conf.AuthPassword).To(Equal("s3cr3t"))
+		})
+
+		It("leaves AuthPassword empty when no password is resolved", func() {
+			apiPeer := toAPIPeer(peer, "")
+			Expect(apiPeer.Conf.AuthPassword).To(BeEmpty())
+		})
 	})
 })
 

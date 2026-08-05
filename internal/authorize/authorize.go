@@ -20,8 +20,10 @@ limitations under the License.
 package authorize
 
 import (
+	"cmp"
 	"fmt"
 	"net"
+	"slices"
 
 	kregv1alpha1 "github.com/phenixblue/kreg/api/v1alpha1"
 	"github.com/phenixblue/kreg/internal/pipeline"
@@ -41,8 +43,17 @@ import (
 // RR's, so prefix->cluster via allowedPrefixes containment is the only
 // trustworthy signal — see the "Attribution note" in
 // docs/design/architecture.md §2.1.
+//
+// A binding's maxPrefixes is a per-cluster budget, not a per-session one:
+// through a route reflector, one physical peer session carries multiple
+// clusters' routes, distinguished only by which binding matched — so
+// exceeding a binding's cap fails closed on that cluster's excess routes
+// only (same Rejected/Reason mechanism as an allowedPrefixes miss),
+// rather than tearing down the shared session and taking every other
+// cluster behind that RR down with it.
 func Authorize(routes []pipeline.RIBRoute, bindings []kregv1alpha1.ClusterBinding) ([]pipeline.RIBRoute, error) {
 	authorized := make([]pipeline.RIBRoute, 0, len(routes))
+	matched := map[string][]int{} // ClusterID -> indices into authorized
 	for _, route := range routes {
 		binding, err := matchBinding(route.Prefix, bindings)
 		if err != nil {
@@ -59,7 +70,29 @@ func Authorize(routes []pipeline.RIBRoute, bindings []kregv1alpha1.ClusterBindin
 		route.ClusterID = binding.ClusterID
 		route.Locality = pipeline.Locality{Region: binding.Locality.Region, Zone: binding.Locality.Zone}
 		authorized = append(authorized, route)
+		matched[binding.ClusterID] = append(matched[binding.ClusterID], len(authorized)-1)
 	}
+
+	for i := range bindings {
+		binding := bindings[i]
+		if binding.MaxPrefixes == nil {
+			continue
+		}
+		indices := matched[binding.ClusterID]
+		if int32(len(indices)) <= *binding.MaxPrefixes {
+			continue
+		}
+		// Deterministic order so which prefixes survive doesn't depend on
+		// RIB iteration order.
+		slices.SortFunc(indices, func(a, b int) int {
+			return cmp.Compare(authorized[a].Prefix, authorized[b].Prefix)
+		})
+		for _, idx := range indices[*binding.MaxPrefixes:] {
+			authorized[idx].Rejected = true
+			authorized[idx].Reason = fmt.Sprintf("cluster %s exceeds maxPrefixes %d", binding.ClusterID, *binding.MaxPrefixes)
+		}
+	}
+
 	return authorized, nil
 }
 

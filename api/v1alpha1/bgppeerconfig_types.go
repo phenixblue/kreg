@@ -148,7 +148,14 @@ type ClusterBinding struct {
 	// +kubebuilder:validation:MinItems=1
 	AllowedPrefixes []string `json:"allowedPrefixes"`
 
-	// maxPrefixes tears down the session if the peer exceeds it.
+	// maxPrefixes caps how many prefixes this cluster may have accepted at
+	// once. It's a per-cluster budget, not a per-session one: through a
+	// route reflector, one physical peer session can carry multiple
+	// clusters' routes, distinguished only by which binding matched.
+	// Exceeding it fails closed on this cluster's excess routes only
+	// (flagged Rejected, same as an allowedPrefixes miss) — it does not
+	// tear down the shared session or affect any other cluster behind the
+	// same peer.
 	// +optional
 	MaxPrefixes *int32 `json:"maxPrefixes,omitempty"`
 

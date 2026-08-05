@@ -26,10 +26,12 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	istioclientv1 "istio.io/client-go/pkg/apis/networking/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -37,6 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	kregv1alpha1 "github.com/phenixblue/kreg/api/v1alpha1"
+	"github.com/phenixblue/kreg/internal/authorize"
 	"github.com/phenixblue/kreg/internal/controller"
 	"github.com/phenixblue/kreg/internal/damp/ewma"
 	"github.com/phenixblue/kreg/internal/ingest"
@@ -162,7 +165,14 @@ func main() {
 	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:                 scheme,
+		Scheme: scheme,
+		Client: client.Options{
+			// TCP-MD5 peer secrets are read straight from the API server
+			// rather than cached — a controller-wide Secret informer would
+			// mean holding every Secret in the namespace in memory just to
+			// resolve the occasional BGPPeerAuth.tcpMD5SecretRef.
+			Cache: &client.CacheOptions{DisableFor: []client.Object{&corev1.Secret{}}},
+		},
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
@@ -192,10 +202,22 @@ func main() {
 	ingestManager := ingest.NewManager()
 	go ingestManager.Serve()
 
+	// Shared between BGPBackendPolicy's snapshot source, where Authorize
+	// actually runs, and BGPPeerConfigReconciler, which owns
+	// PeerStatus.PrefixesRejected but runs as a separate reconcile loop —
+	// same "construct once, share the instance" pattern as ingestManager.
+	rejectionTracker := &authorize.RejectionTracker{}
+
 	if err := (&controller.BGPPeerConfigReconciler{
-		Client:  mgr.GetClient(),
-		Scheme:  mgr.GetScheme(),
-		Manager: ingestManager,
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		// The namespace TCPMD5SecretRefs resolve against. BGPPeerConfig is
+		// cluster-scoped, so there's no "same namespace as the CR" to fall
+		// back on — secrets must live wherever the controller itself runs
+		// (the downward-API POD_NAMESPACE set in config/manager/manager.yaml).
+		Namespace: os.Getenv("POD_NAMESPACE"),
+		Manager:   ingestManager,
+		Tracker:   rejectionTracker,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "bgppeerconfig")
 		os.Exit(1)
@@ -205,9 +227,10 @@ func main() {
 	// and AdvertisedBackend's materialized view can never disagree about
 	// what the settled snapshot currently is.
 	snapshotSource := &snapshot.Source{
-		Client: mgr.GetClient(),
-		RIB:    ingestManager,
-		Damper: ewma.Damper{},
+		Client:  mgr.GetClient(),
+		RIB:     ingestManager,
+		Damper:  ewma.Damper{},
+		Tracker: rejectionTracker,
 	}
 
 	if err := (&controller.BGPBackendPolicyReconciler{

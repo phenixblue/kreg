@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -35,12 +36,14 @@ import (
 // needing a real BGP session. Real GoBGP wire-level behavior is covered
 // separately by internal/ingest's loopback tests.
 type fakePeerManager struct {
-	reconfigureSpec *kregv1alpha1.BGPPeerConfigSpec
-	statuses        []kregv1alpha1.PeerStatus
+	reconfigureSpec      *kregv1alpha1.BGPPeerConfigSpec
+	reconfigurePasswords map[string]string
+	statuses             []kregv1alpha1.PeerStatus
 }
 
-func (f *fakePeerManager) Reconfigure(_ context.Context, spec *kregv1alpha1.BGPPeerConfigSpec) error {
+func (f *fakePeerManager) Reconfigure(_ context.Context, spec *kregv1alpha1.BGPPeerConfigSpec, passwords map[string]string) error {
 	f.reconfigureSpec = spec
+	f.reconfigurePasswords = passwords
 	return nil
 }
 
@@ -114,6 +117,71 @@ var _ = Describe("BGPPeerConfig Controller", func() {
 			Expect(k8sClient.Get(ctx, typeNamespacedName, &updated)).To(Succeed())
 			Expect(updated.Status.Peers).To(HaveLen(1))
 			Expect(updated.Status.Peers[0].SessionState).To(Equal(kregv1alpha1.PeerSessionStateEstablished))
+		})
+
+		Context("with TCP-MD5 peer authentication", func() {
+			const secretName = "rr-atl-a-md5"
+			const secretNamespace = "default"
+
+			var secret *corev1.Secret
+
+			BeforeEach(func() {
+				secret = &corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: secretNamespace},
+					Data:       map[string][]byte{"password": []byte("s3cr3t")},
+				}
+				Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+			})
+
+			AfterEach(func() {
+				Expect(k8sClient.Delete(ctx, secret)).To(Succeed())
+			})
+
+			setAuthRef := func(name string) {
+				var resource kregv1alpha1.BGPPeerConfig
+				Expect(k8sClient.Get(ctx, typeNamespacedName, &resource)).To(Succeed())
+				resource.Spec.Peers[0].Auth = &kregv1alpha1.BGPPeerAuth{
+					TCPMD5SecretRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: name},
+						Key:                  "password",
+					},
+				}
+				Expect(k8sClient.Update(ctx, &resource)).To(Succeed())
+			}
+
+			It("resolves the secret and passes the password to the peer manager", func() {
+				setAuthRef(secretName)
+
+				manager := &fakePeerManager{}
+				controllerReconciler := &BGPPeerConfigReconciler{
+					Client:    k8sClient,
+					Scheme:    k8sClient.Scheme(),
+					Namespace: secretNamespace,
+					Manager:   manager,
+				}
+
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: typeNamespacedName,
+				})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(manager.reconfigurePasswords).To(HaveKeyWithValue("rr-atl-a", "s3cr3t"))
+			})
+
+			It("errors, rather than starting an unauthenticated session, when the secret is missing and not optional", func() {
+				setAuthRef("does-not-exist")
+
+				controllerReconciler := &BGPPeerConfigReconciler{
+					Client:    k8sClient,
+					Scheme:    k8sClient.Scheme(),
+					Namespace: secretNamespace,
+					Manager:   &fakePeerManager{},
+				}
+
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: typeNamespacedName,
+				})
+				Expect(err).To(HaveOccurred())
+			})
 		})
 	})
 })

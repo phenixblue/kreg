@@ -64,6 +64,13 @@ type Source struct {
 	Client client.Client
 	RIB    ingest.RIB
 	Damper damp.Damper
+
+	// Tracker carries Authorize's per-peer rejection counts to
+	// BGPPeerConfigReconciler, which owns PeerStatus.PrefixesRejected but
+	// runs as a separate reconcile loop that never calls Authorize
+	// itself. Optional — nil just means PrefixesRejected stays
+	// unreported, same as before this field existed.
+	Tracker *authorize.RejectionTracker
 }
 
 // Snapshot implements controller.SnapshotSource.
@@ -85,6 +92,9 @@ func (s *Source) Snapshot(ctx context.Context) ([]pipeline.BackendCandidate, err
 	authorized, err := authorize.Authorize(routes, bindings)
 	if err != nil {
 		return nil, fmt.Errorf("authorize: %w", err)
+	}
+	if s.Tracker != nil {
+		s.Tracker.Set(authorize.RejectedCountsByPeer(authorized))
 	}
 
 	var communityMap kregv1alpha1.CommunityMap

@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kregv1alpha1 "github.com/phenixblue/kreg/api/v1alpha1"
+	"github.com/phenixblue/kreg/internal/authorize"
 	"github.com/phenixblue/kreg/internal/damp/ewma"
 	"github.com/phenixblue/kreg/internal/pipeline"
 	"github.com/phenixblue/kreg/internal/snapshot"
@@ -130,6 +131,23 @@ var _ = Describe("Source", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(candidates).To(HaveLen(1))
 		Expect(candidates[0].Rejected).To(BeTrue())
+	})
+
+	It("records Authorize's per-peer rejection counts on Tracker", func() {
+		tracker := &authorize.RejectionTracker{}
+		src := &snapshot.Source{
+			Client: newFakeClient(docPeerConfig()),
+			RIB: fakeRIB{routes: []pipeline.RIBRoute{
+				{Prefix: atl1Address, Peer: "rr-atl-a"},      // authorized, not rejected
+				{Prefix: "203.0.113.5/32", Peer: "rr-atl-a"}, // outside every binding -> rejected
+			}},
+			Damper:  ewma.Damper{},
+			Tracker: tracker,
+		}
+
+		_, err := src.Snapshot(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(tracker.Get("rr-atl-a")).To(Equal(int32(1)))
 	})
 
 	It("propagates an ingest error", func() {

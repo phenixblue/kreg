@@ -37,8 +37,7 @@ import (
 // BGPBackendPolicy snapshot source, which reads its current table.
 //
 // Scope for build-order step 2: RouteReflectorClient sessions, IPv4
-// unicast only. Deferred: Passive/BMPCollector modes, maxPrefixes
-// session teardown, TCP-MD5 auth, RPKI, IPv6.
+// unicast only. Deferred: Passive/BMPCollector modes, RPKI, IPv6.
 type Manager struct {
 	server  *gobgpserver.BgpServer
 	started bool
@@ -62,7 +61,11 @@ func (m *Manager) Stop() {
 
 // Reconfigure converges the live peer set to spec: starts BGP on the
 // first call, then adds, updates, or removes peers to match spec.Peers.
-func (m *Manager) Reconfigure(ctx context.Context, spec *kregv1alpha1.BGPPeerConfigSpec) error {
+// passwords carries each auth-configured peer's resolved TCP-MD5
+// password, keyed by peer Name — the caller (BGPPeerConfigReconciler) has
+// already resolved any Auth.TCPMD5SecretRef, since that requires a k8s
+// client this package deliberately doesn't have.
+func (m *Manager) Reconfigure(ctx context.Context, spec *kregv1alpha1.BGPPeerConfigSpec, passwords map[string]string) error {
 	if !m.started {
 		listenPort := int32(179)
 		if spec.ListenPort != nil {
@@ -90,7 +93,7 @@ func (m *Manager) Reconfigure(ctx context.Context, spec *kregv1alpha1.BGPPeerCon
 	desired := map[string]bool{}
 	for _, peer := range spec.Peers {
 		desired[peer.Address] = true
-		apiPeer := toAPIPeer(peer)
+		apiPeer := toAPIPeer(peer, passwords[peer.Name])
 		if existing[peer.Address] {
 			if _, err := m.server.UpdatePeer(ctx, &api.UpdatePeerRequest{Peer: apiPeer}); err != nil {
 				return fmt.Errorf("update peer %s: %w", peer.Name, err)
@@ -113,15 +116,17 @@ func (m *Manager) Reconfigure(ctx context.Context, spec *kregv1alpha1.BGPPeerCon
 	return nil
 }
 
-func toAPIPeer(peer kregv1alpha1.BGPPeer) *api.Peer {
-	// NOTE: peer.Auth.TCPMD5SecretRef requires resolving a Secret and
-	// isn't wired up in this pass — see the build-order step 2 deferred
-	// list in docs/design/architecture.md.
+// toAPIPeer builds GoBGP's peer config from spec. password is the
+// resolved TCP-MD5 secret for this peer (empty if peer.Auth is unset —
+// resolution happens in BGPPeerConfigReconciler, which has the k8s
+// client this package doesn't).
+func toAPIPeer(peer kregv1alpha1.BGPPeer, password string) *api.Peer {
 	address, remotePort := splitHostPort(peer.Address)
 	apiPeer := &api.Peer{
 		Conf: &api.PeerConf{
 			NeighborAddress: address,
 			PeerAsn:         uint32(peer.RemoteASN),
+			AuthPassword:    password,
 		},
 		Transport: &api.Transport{RemotePort: uint32(remotePort)},
 		AfiSafis: []*api.AfiSafi{{
