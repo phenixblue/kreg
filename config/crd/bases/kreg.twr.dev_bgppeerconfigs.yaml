@@ -91,6 +91,7 @@ spec:
                         tear down the shared session or affect any other cluster behind the
                         same peer.
                       format: int32
+                      minimum: 0
                       type: integer
                   required:
                   - allowedPrefixes

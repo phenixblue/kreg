@@ -75,7 +75,15 @@ func Authorize(routes []pipeline.RIBRoute, bindings []kregv1alpha1.ClusterBindin
 
 	for i := range bindings {
 		binding := bindings[i]
-		if binding.MaxPrefixes == nil {
+		// CRD validation (+kubebuilder:validation:Minimum=0) rejects a
+		// negative maxPrefixes going forward, but this stays defensive
+		// against any object stored before that validation existed —
+		// indices[*binding.MaxPrefixes:] below would panic on a negative
+		// bound otherwise. Treated the same as unset: no cap enforced,
+		// not a fail-closed reject-everything, since silently taking a
+		// whole cluster's traffic down over a malformed config value
+		// would be a worse failure mode than under-enforcing it.
+		if binding.MaxPrefixes == nil || *binding.MaxPrefixes < 0 {
 			continue
 		}
 		indices := matched[binding.ClusterID]

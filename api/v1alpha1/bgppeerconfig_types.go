@@ -157,6 +157,7 @@ type ClusterBinding struct {
 	// tear down the shared session or affect any other cluster behind the
 	// same peer.
 	// +optional
+	// +kubebuilder:validation:Minimum=0
 	MaxPrefixes *int32 `json:"maxPrefixes,omitempty"`
 
 	// +required

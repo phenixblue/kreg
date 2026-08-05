@@ -232,5 +232,25 @@ var _ = Describe("Authorize", func() {
 			Expect(byPrefix[atl1Address2].Rejected).To(BeTrue())
 			Expect(byPrefix[atl2Address].Rejected).To(BeFalse())
 		})
+
+		It("does not panic and enforces no cap for a negative maxPrefixes", func() {
+			// CRD validation (+kubebuilder:validation:Minimum=0) rejects
+			// this going forward, but a stored object from before that
+			// validation existed must not crash Authorize —
+			// indices[*binding.MaxPrefixes:] would panic on a negative
+			// bound without the guard.
+			routes := []pipeline.RIBRoute{
+				{Prefix: atl1Address},
+				{Prefix: atl1Address2},
+			}
+
+			Expect(func() {
+				authorized, err := authorize.Authorize(routes, maxPrefixesBindings(-1))
+				Expect(err).NotTo(HaveOccurred())
+				for _, r := range authorized {
+					Expect(r.Rejected).To(BeFalse())
+				}
+			}).NotTo(Panic())
+		})
 	})
 })
