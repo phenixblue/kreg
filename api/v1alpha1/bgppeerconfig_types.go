@@ -59,8 +59,12 @@ type BGPPeerConfigSpec struct {
 	// +optional
 	Mode BGPPeerConfigMode `json:"mode,omitempty"`
 
-	// peers are the BGP sessions the controller establishes.
+	// peers are the BGP sessions the controller establishes. name must be
+	// unique — it's the key used to resolve which peer a
+	// tcpMD5SecretRef-resolved password belongs to.
 	// +optional
+	// +listType=map
+	// +listMapKey=name
 	Peers []BGPPeer `json:"peers,omitempty"`
 
 	// clusterBindings is the trust boundary: a peer may only originate

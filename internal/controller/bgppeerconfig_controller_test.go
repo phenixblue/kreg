@@ -51,6 +51,12 @@ func (f *fakePeerManager) Status(context.Context) ([]kregv1alpha1.PeerStatus, er
 	return f.statuses, nil
 }
 
+const (
+	rrAtlA            = "rr-atl-a"
+	rrAtlAAddress     = "10.0.10.1"
+	secretPasswordKey = "password"
+)
+
 var _ = Describe("BGPPeerConfig Controller", func() {
 	Context("When reconciling a resource", func() {
 		// BGPPeerConfig is cluster-scoped: no namespace.
@@ -70,8 +76,8 @@ var _ = Describe("BGPPeerConfig Controller", func() {
 						LocalASN: 4200000000,
 						RouterID: "10.0.0.1",
 						Peers: []kregv1alpha1.BGPPeer{{
-							Name:      "rr-atl-a",
-							Address:   "10.0.10.1",
+							Name:      rrAtlA,
+							Address:   rrAtlAAddress,
 							RemoteASN: 4200000000,
 						}},
 					},
@@ -92,7 +98,7 @@ var _ = Describe("BGPPeerConfig Controller", func() {
 			By("Reconciling the created resource")
 			manager := &fakePeerManager{
 				statuses: []kregv1alpha1.PeerStatus{{
-					Name:         "10.0.10.1",
+					Name:         rrAtlAAddress,
 					SessionState: kregv1alpha1.PeerSessionStateEstablished,
 				}},
 			}
@@ -110,7 +116,7 @@ var _ = Describe("BGPPeerConfig Controller", func() {
 			By("passing the resource's spec to the peer manager")
 			Expect(manager.reconfigureSpec).NotTo(BeNil())
 			Expect(manager.reconfigureSpec.Peers).To(HaveLen(1))
-			Expect(manager.reconfigureSpec.Peers[0].Address).To(Equal("10.0.10.1"))
+			Expect(manager.reconfigureSpec.Peers[0].Address).To(Equal(rrAtlAAddress))
 
 			By("recording the peer manager's status")
 			var updated kregv1alpha1.BGPPeerConfig
@@ -128,7 +134,7 @@ var _ = Describe("BGPPeerConfig Controller", func() {
 			BeforeEach(func() {
 				secret = &corev1.Secret{
 					ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: secretNamespace},
-					Data:       map[string][]byte{"password": []byte("s3cr3t")},
+					Data:       map[string][]byte{secretPasswordKey: []byte("s3cr3t")},
 				}
 				Expect(k8sClient.Create(ctx, secret)).To(Succeed())
 			})
@@ -143,7 +149,7 @@ var _ = Describe("BGPPeerConfig Controller", func() {
 				resource.Spec.Peers[0].Auth = &kregv1alpha1.BGPPeerAuth{
 					TCPMD5SecretRef: &corev1.SecretKeySelector{
 						LocalObjectReference: corev1.LocalObjectReference{Name: name},
-						Key:                  "password",
+						Key:                  secretPasswordKey,
 					},
 				}
 				Expect(k8sClient.Update(ctx, &resource)).To(Succeed())
@@ -164,7 +170,7 @@ var _ = Describe("BGPPeerConfig Controller", func() {
 					NamespacedName: typeNamespacedName,
 				})
 				Expect(err).NotTo(HaveOccurred())
-				Expect(manager.reconfigurePasswords).To(HaveKeyWithValue("rr-atl-a", "s3cr3t"))
+				Expect(manager.reconfigurePasswords).To(HaveKeyWithValue(rrAtlA, "s3cr3t"))
 			})
 
 			It("errors, rather than starting an unauthenticated session, when the secret is missing and not optional", func() {
@@ -201,6 +207,83 @@ var _ = Describe("BGPPeerConfig Controller", func() {
 				})
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("POD_NAMESPACE"))
+			})
+
+			It("errors on a blank tcpMD5SecretRef.name rather than a low-signal API error", func() {
+				var resource kregv1alpha1.BGPPeerConfig
+				Expect(k8sClient.Get(ctx, typeNamespacedName, &resource)).To(Succeed())
+				resource.Spec.Peers[0].Auth = &kregv1alpha1.BGPPeerAuth{
+					TCPMD5SecretRef: &corev1.SecretKeySelector{Key: secretPasswordKey},
+				}
+				Expect(k8sClient.Update(ctx, &resource)).To(Succeed())
+
+				controllerReconciler := &BGPPeerConfigReconciler{
+					Client:    k8sClient,
+					Scheme:    k8sClient.Scheme(),
+					Namespace: secretNamespace,
+					Manager:   &fakePeerManager{},
+				}
+
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: typeNamespacedName,
+				})
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("tcpMD5SecretRef.name is empty"))
+			})
+
+			It("errors on a blank tcpMD5SecretRef.key rather than a low-signal API error", func() {
+				var resource kregv1alpha1.BGPPeerConfig
+				Expect(k8sClient.Get(ctx, typeNamespacedName, &resource)).To(Succeed())
+				resource.Spec.Peers[0].Auth = &kregv1alpha1.BGPPeerAuth{
+					TCPMD5SecretRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
+					},
+				}
+				Expect(k8sClient.Update(ctx, &resource)).To(Succeed())
+
+				controllerReconciler := &BGPPeerConfigReconciler{
+					Client:    k8sClient,
+					Scheme:    k8sClient.Scheme(),
+					Namespace: secretNamespace,
+					Manager:   &fakePeerManager{},
+				}
+
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: typeNamespacedName,
+				})
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("tcpMD5SecretRef.key is empty"))
+			})
+
+			It("rejects duplicate peer names at the API server, before a password could ever apply to the wrong peer", func() {
+				var resource kregv1alpha1.BGPPeerConfig
+				Expect(k8sClient.Get(ctx, typeNamespacedName, &resource)).To(Succeed())
+				// Second peer deliberately shares the first's name and has
+				// no auth of its own — the bug this (and resolvePasswords'
+				// own defensive duplicate check, for any object that
+				// somehow predates this validation) guards against is
+				// exactly this peer silently inheriting the other's
+				// password via a passwords map keyed by (non-unique) Name.
+				// +listType=map,+listMapKey=name on Peers rejects this at
+				// admission, before Reconcile is ever involved.
+				resource.Spec.Peers = append(resource.Spec.Peers, kregv1alpha1.BGPPeer{
+					Name:      resource.Spec.Peers[0].Name,
+					Address:   "10.0.10.2",
+					RemoteASN: 4200000000,
+				})
+				err := k8sClient.Update(ctx, &resource)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("Duplicate value"))
+			})
+
+			It("resolvePasswords defensively rejects duplicate peer names too, for any object stored before that validation existed", func() {
+				r := &BGPPeerConfigReconciler{Namespace: secretNamespace}
+				_, err := r.resolvePasswords(ctx, []kregv1alpha1.BGPPeer{
+					{Name: rrAtlA, Address: rrAtlAAddress, RemoteASN: 4200000000},
+					{Name: rrAtlA, Address: "10.0.10.2", RemoteASN: 4200000000},
+				})
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("duplicate peer name"))
 			})
 		})
 	})

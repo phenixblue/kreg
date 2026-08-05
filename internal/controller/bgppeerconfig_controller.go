@@ -132,9 +132,22 @@ func (r *BGPPeerConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 // marked Optional: a BGP session silently coming up unauthenticated
 // because its intended password couldn't be resolved would be a security
 // regression, not a degradation worth tolerating quietly.
+//
+// The returned map is keyed by peer.Name, which Reconfigure then looks
+// up per-peer to build each one's GoBGP config — so peers is required to
+// have unique names (+listType=map,+listMapKey=name on the CRD field
+// enforces that going forward); this stays defensive against any object
+// stored before that validation existed, where a duplicate name could
+// otherwise let one peer's password silently apply to another's session.
 func (r *BGPPeerConfigReconciler) resolvePasswords(ctx context.Context, peers []kregv1alpha1.BGPPeer) (map[string]string, error) {
 	passwords := map[string]string{}
+	seenNames := map[string]bool{}
 	for _, peer := range peers {
+		if seenNames[peer.Name] {
+			return nil, fmt.Errorf("duplicate peer name %q", peer.Name)
+		}
+		seenNames[peer.Name] = true
+
 		if peer.Auth == nil || peer.Auth.TCPMD5SecretRef == nil {
 			continue
 		}
@@ -142,6 +155,12 @@ func (r *BGPPeerConfigReconciler) resolvePasswords(ctx context.Context, peers []
 			return nil, fmt.Errorf("peer %s: tcpMD5SecretRef is set but no namespace is configured to resolve it against (POD_NAMESPACE not set?)", peer.Name)
 		}
 		ref := peer.Auth.TCPMD5SecretRef
+		if ref.Name == "" {
+			return nil, fmt.Errorf("peer %s: tcpMD5SecretRef.name is empty", peer.Name)
+		}
+		if ref.Key == "" {
+			return nil, fmt.Errorf("peer %s: tcpMD5SecretRef.key is empty", peer.Name)
+		}
 		optional := ref.Optional != nil && *ref.Optional
 
 		var secret corev1.Secret
