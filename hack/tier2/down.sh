@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Tear down everything up.sh created: containerlab destroy removes the
+# FRR nodes and, via the k8s-kind node kind, the hub/spoke-a/spoke-b kind
+# clusters too - unlike Tier 1, there's no "leave the cluster running"
+# middle ground here, since the whole point is the multi-cluster
+# topology, not a single reusable cluster.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+TIER2_DIR="${REPO_ROOT}/hack/tier2"
+
+log() { printf '\n==> %s\n' "$*"; }
+
+log "containerlab topology (frr-rr-a, frr-rr-b, hub, spoke-a, spoke-b)"
+cd "${TIER2_DIR}"
+sudo containerlab destroy -t topology.clab.yml --cleanup 2>&1 || true
+
+echo
+echo "Torn down. Rerun hack/tier2/up.sh to bring it back."

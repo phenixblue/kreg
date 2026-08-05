@@ -1,0 +1,4 @@
+bgpControlPlane:
+  enabled: true
+ipam:
+  mode: kubernetes

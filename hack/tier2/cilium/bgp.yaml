@@ -1,0 +1,61 @@
+# Simulates spoke-b from docs/design/architecture.md's worked example
+# (clusterID atl-2, 198.51.100.64/26). Unlike Calico's serviceLoadBalancerIPs
+# (a static CIDR list), Cilium's advertisementType: Service + LoadBalancerIP
+# dynamically advertises exactly whatever IP each matching Service actually
+# gets — no aggregate-block pitfall here, but the Service still needs the
+# "bgp: enabled" label to be selected. See hack/tier2/whoami/spoke-b.yaml.
+apiVersion: cilium.io/v2
+kind: CiliumBGPClusterConfig
+metadata:
+  name: tier2
+spec:
+  bgpInstances:
+    - name: spoke-b
+      localASN: 4200000000
+      peers:
+        - name: rr-a
+          peerASN: 4200000000
+          peerAddress: 10.201.0.17
+          peerConfigRef:
+            name: rr-client
+        - name: rr-b
+          peerASN: 4200000000
+          peerAddress: 10.201.0.21
+          peerConfigRef:
+            name: rr-client
+---
+apiVersion: cilium.io/v2
+kind: CiliumBGPPeerConfig
+metadata:
+  name: rr-client
+spec:
+  families:
+    - afi: ipv4
+      safi: unicast
+      advertisements:
+        matchLabels:
+          advertise: bgp
+---
+apiVersion: cilium.io/v2
+kind: CiliumBGPAdvertisement
+metadata:
+  name: whoami-lb
+  labels:
+    advertise: bgp
+spec:
+  advertisements:
+    - advertisementType: Service
+      service:
+        addresses:
+          - LoadBalancerIP
+      selector:
+        matchLabels:
+          bgp: enabled
+---
+apiVersion: cilium.io/v2
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: whoami-lb-pool
+spec:
+  blocks:
+    - cidr: 198.51.100.64/26

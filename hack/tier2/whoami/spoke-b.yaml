@@ -1,0 +1,49 @@
+# See spoke-a.yaml for why this serves HTTPS. bgp: enabled matches
+# hack/tier2/cilium/bgp.yaml's CiliumBGPAdvertisement selector; the pinned
+# IP (lbipam.cilium.io/ips) is cosmetic here — Cilium's advertisement
+# tracks whatever gets allocated dynamically — but keeps the address
+# predictable across rig rebuilds, matching spoke-a's convention.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whoami
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: whoami
+  template:
+    metadata:
+      labels:
+        app: whoami
+    spec:
+      containers:
+        - name: whoami
+          image: traefik/whoami:latest
+          args: ["-name", "spoke-b", "-port", "443", "-cert", "/certs/tls.crt", "-key", "/certs/tls.key"]
+          ports:
+            - containerPort: 443
+          volumeMounts:
+            - name: certs
+              mountPath: /certs
+              readOnly: true
+      volumes:
+        - name: certs
+          secret:
+            secretName: whoami-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: whoami
+  labels:
+    bgp: enabled
+  annotations:
+    lbipam.cilium.io/ips: "198.51.100.74"
+spec:
+  type: LoadBalancer
+  selector:
+    app: whoami
+  ports:
+    - port: 443
+      targetPort: 443

@@ -1,0 +1,28 @@
+# Deploy overlay for the Tier 2 test rig (docs/design/architecture.md
+# §5 / hack/tier2), applied to the "hub" kind cluster. Same reasoning as
+# config/tier1: this overlay needs hostNetwork so kreg-controller's
+# embedded GoBGP can reach the containerlab-wired point-to-point
+# interfaces (injected directly into the node's root network namespace,
+# outside any CNI-managed pod network) that connect it to the route
+# reflectors.
+namespace: kreg-tier2
+
+resources:
+- ../default
+
+images:
+- name: controller
+  newName: kreg-controller
+  newTag: tier2
+
+patches:
+- target:
+    kind: Deployment
+    name: controller-manager
+  patch: |-
+    - op: add
+      path: /spec/template/spec/hostNetwork
+      value: true
+    - op: add
+      path: /spec/template/spec/dnsPolicy
+      value: ClusterFirstWithHostNet
