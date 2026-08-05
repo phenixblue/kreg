@@ -37,4 +37,7 @@ resources:
 - bgppeerconfig_admin_role.yaml
 - bgppeerconfig_editor_role.yaml
 - bgppeerconfig_viewer_role.yaml
+- bgpstabilityconfig_admin_role.yaml
+- bgpstabilityconfig_editor_role.yaml
+- bgpstabilityconfig_viewer_role.yaml
 

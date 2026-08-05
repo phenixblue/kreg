@@ -17,8 +17,12 @@ limitations under the License.
 package report_test
 
 import (
+	"math"
+	"time"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega/gstruct"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kregv1alpha1 "github.com/phenixblue/kreg/api/v1alpha1"
@@ -90,6 +94,110 @@ var _ = Describe("BuildAdvertisedBackends", func() {
 
 		backends := report.BuildAdvertisedBackends([]pipeline.BackendCandidate{candidate}, nil)
 		Expect(backends[0].Status.State).To(Equal(kregv1alpha1.BackendStateDraining))
+	})
+
+	It("reports a Damp-decided state (e.g. Dampened) ahead of Drain, with Damp's own reason", func() {
+		candidate := docCandidate()
+		candidate.Drain = true // would be Draining if Damp hadn't already decided otherwise
+		candidate.Damping = &pipeline.DampingInfo{
+			State:  kregv1alpha1.BackendStateDampened,
+			Reason: "flap-dampened: score 3400 (>= suppressThreshold 3000)",
+		}
+
+		backends := report.BuildAdvertisedBackends([]pipeline.BackendCandidate{candidate}, nil)
+		Expect(backends[0].Status.State).To(Equal(kregv1alpha1.BackendStateDampened))
+		Expect(backends[0].Status.Reason).To(Equal(candidate.Damping.Reason))
+	})
+
+	It("reports Rejected ahead of any Damp-decided state", func() {
+		candidate := docCandidate()
+		candidate.Rejected = true
+		candidate.Reason = "prefix 198.51.100.10/32 not in allowedPrefixes for any cluster"
+		candidate.Damping = &pipeline.DampingInfo{State: kregv1alpha1.BackendStateDampened, Reason: "should be shadowed"}
+
+		backends := report.BuildAdvertisedBackends([]pipeline.BackendCandidate{candidate}, nil)
+		Expect(backends[0].Status.State).To(Equal(kregv1alpha1.BackendStateRejected))
+		Expect(backends[0].Status.Reason).To(Equal(candidate.Reason))
+	})
+
+	It("populates flapCount24h/dampeningPenalty/timestamps from Damping when set", func() {
+		observedAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		withdrawnAt := observedAt.Add(-5 * time.Second)
+		candidate := docCandidate()
+		candidate.Damping = &pipeline.DampingInfo{
+			State:          kregv1alpha1.BackendStateHoldDown,
+			Reason:         "withdrawn 5s ago, grace 30s",
+			Score:          340.4,
+			FlapCount24h:   2,
+			LastObservedAt: observedAt,
+			WithdrawnAt:    &withdrawnAt,
+		}
+
+		backends := report.BuildAdvertisedBackends([]pipeline.BackendCandidate{candidate}, nil)
+		stability := backends[0].Status.Stability
+		Expect(stability.FlapCount24h).To(Equal(int32(2)))
+		Expect(stability.DampeningPenalty).To(Equal(int32(340))) // rounded from 340.4
+		Expect(stability.LastObservedAt).To(gstruct.PointTo(Equal(metav1.NewTime(observedAt))))
+		Expect(stability.WithdrawnAt).To(gstruct.PointTo(Equal(metav1.NewTime(withdrawnAt))))
+		Expect(stability.SuppressedSince).To(BeNil())
+		Expect(stability.PendingSince).To(BeNil())
+	})
+
+	It("leaves LastObservedAt nil rather than a bogus year-0001 timestamp when Damping's is zero-valued", func() {
+		// PriorStateFromAdvertisedBackends uses LastObservedAt being nil
+		// as its sentinel for "never evaluated by Damp" -- a non-nil
+		// zero-time here would incorrectly look like a real evaluation
+		// happened.
+		candidate := docCandidate()
+		candidate.Damping = &pipeline.DampingInfo{
+			State: kregv1alpha1.BackendStateDampened,
+			// LastObservedAt deliberately left zero-valued.
+		}
+
+		backends := report.BuildAdvertisedBackends([]pipeline.BackendCandidate{candidate}, nil)
+		Expect(backends[0].Status.Stability.LastObservedAt).To(BeNil())
+	})
+
+	It("clamps an out-of-int32-range score instead of overflowing on cast", func() {
+		candidate := docCandidate()
+		candidate.Damping = &pipeline.DampingInfo{
+			State:          kregv1alpha1.BackendStateDampened,
+			Score:          math.MaxInt32 * 1000, // wildly beyond int32 range
+			LastObservedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		}
+
+		backends := report.BuildAdvertisedBackends([]pipeline.BackendCandidate{candidate}, nil)
+		Expect(backends[0].Status.Stability.DampeningPenalty).To(Equal(int32(math.MaxInt32)))
+	})
+
+	It("maps a NaN score to zero instead of an implementation-defined cast", func() {
+		// NaN compares false against every bound, so it would otherwise
+		// slip past clampToInt32's range checks untouched into
+		// int32(NaN) -- unspecified by the Go spec.
+		candidate := docCandidate()
+		candidate.Damping = &pipeline.DampingInfo{
+			State:          kregv1alpha1.BackendStateDampened,
+			Score:          math.NaN(),
+			LastObservedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		}
+
+		backends := report.BuildAdvertisedBackends([]pipeline.BackendCandidate{candidate}, nil)
+		Expect(backends[0].Status.Stability.DampeningPenalty).To(Equal(int32(0)))
+	})
+
+	It("leaves Damping-derived status fields zero when Damping is nil", func() {
+		// The state Damp never evaluates a candidate at all -- e.g. an
+		// Authorize-rejected route.
+		candidate := docCandidate()
+
+		backends := report.BuildAdvertisedBackends([]pipeline.BackendCandidate{candidate}, nil)
+		stability := backends[0].Status.Stability
+		Expect(stability.FlapCount24h).To(Equal(int32(0)))
+		Expect(stability.DampeningPenalty).To(Equal(int32(0)))
+		Expect(stability.LastObservedAt).To(BeNil())
+		Expect(stability.WithdrawnAt).To(BeNil())
+		Expect(stability.SuppressedSince).To(BeNil())
+		Expect(stability.PendingSince).To(BeNil())
 	})
 
 	It("reports a rejected candidate as Rejected, with no bindings even if a policy would otherwise match", func() {

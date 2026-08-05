@@ -96,7 +96,7 @@ func docPolicy() *kregv1alpha1.BGPBackendPolicy {
 }
 
 // docCandidate mirrors the AdvertisedBackend worked example (atl-1) in
-// docs/design/architecture.md §2.4.
+// docs/design/architecture.md §2.5.
 func docCandidate() pipeline.BackendCandidate {
 	serviceTag := int32(80)
 	return pipeline.BackendCandidate{
@@ -167,6 +167,50 @@ var _ = Describe("Render", func() {
 		output, err := reconcile.Render(policy, []pipeline.BackendCandidate{candidate}, istiodriver.Driver{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(output.EndpointSlices).To(BeEmpty())
+	})
+
+	It("excludes a Dampened candidate", func() {
+		policy := docPolicy()
+		candidate := docCandidate()
+		candidate.Damping = &pipeline.DampingInfo{
+			State:  kregv1alpha1.BackendStateDampened,
+			Reason: "flap-dampened: score 3400 (>= suppressThreshold 3000)",
+		}
+
+		output, err := reconcile.Render(policy, []pipeline.BackendCandidate{candidate}, istiodriver.Driver{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(output.EndpointSlices).To(BeEmpty())
+	})
+
+	It("excludes a Pending candidate", func() {
+		policy := docPolicy()
+		candidate := docCandidate()
+		candidate.Damping = &pipeline.DampingInfo{
+			State:  kregv1alpha1.BackendStatePending,
+			Reason: "settling, additionDelay 30s",
+		}
+
+		output, err := reconcile.Render(policy, []pipeline.BackendCandidate{candidate}, istiodriver.Driver{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(output.EndpointSlices).To(BeEmpty())
+	})
+
+	It("still includes a HoldDown candidate, ready, not draining", func() {
+		// Per docs/design/architecture.md §4: hold-down exists so a
+		// transient blip doesn't drain a healthy cluster -- excluding it
+		// immediately would make hold-down behave identically to instant
+		// removal.
+		policy := docPolicy()
+		candidate := docCandidate()
+		candidate.Damping = &pipeline.DampingInfo{
+			State:  kregv1alpha1.BackendStateHoldDown,
+			Reason: "withdrawn 4s ago, grace 30s",
+		}
+
+		output, err := reconcile.Render(policy, []pipeline.BackendCandidate{candidate}, istiodriver.Driver{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(output.EndpointSlices).To(HaveLen(1))
+		Expect(*output.EndpointSlices[0].Endpoints[0].Conditions.Ready).To(BeTrue())
 	})
 
 	It("marks a draining candidate not-ready without removing it", func() {

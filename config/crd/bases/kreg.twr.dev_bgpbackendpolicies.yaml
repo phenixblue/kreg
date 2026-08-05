@@ -197,38 +197,6 @@ spec:
                     format: int32
                     type: integer
                 type: object
-              stability:
-                description: |-
-                  stability controls how route churn is smoothed before it reaches
-                  Gateway API config.
-                properties:
-                  additionDelay:
-                    description: |-
-                      additionDelay is how long a newly-advertised route must be settled
-                      before it's added as a backend.
-                    type: string
-                  dampening:
-                    description: DampeningConfig configures RFC 2439-style flap dampening.
-                    properties:
-                      enabled:
-                        type: boolean
-                      halfLife:
-                        type: string
-                      maxSuppress:
-                        type: string
-                      reuseThreshold:
-                        format: int32
-                        type: integer
-                      suppressThreshold:
-                        format: int32
-                        type: integer
-                    type: object
-                  withdrawalGrace:
-                    description: |-
-                      withdrawalGrace is the hold-down before removing a backend that
-                      stopped being advertised.
-                    type: string
-                type: object
               targetRef:
                 description: targetRef identifies the Gateway or HTTPRoute this policy
                   attaches to.

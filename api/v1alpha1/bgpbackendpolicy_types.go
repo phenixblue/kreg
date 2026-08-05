@@ -47,11 +47,6 @@ type BGPBackendPolicySpec struct {
 	// +optional
 	LoadBalancing LoadBalancingConfig `json:"loadBalancing,omitzero"`
 
-	// stability controls how route churn is smoothed before it reaches
-	// Gateway API config.
-	// +optional
-	Stability StabilityConfig `json:"stability,omitzero"`
-
 	// activeHealth configures HTTP-level health checking of selected
 	// backends. BGP is reachability, not application health; both are
 	// required before traffic is trusted with production traffic.
@@ -169,41 +164,6 @@ type LocalityLoadBalancingConfig struct {
 	// +kubebuilder:validation:Maximum=100
 	// +optional
 	FailoverThreshold *int32 `json:"failoverThreshold,omitempty"`
-}
-
-// StabilityConfig controls how route churn is smoothed before it reaches
-// generated Gateway API / Istio config.
-type StabilityConfig struct {
-	// withdrawalGrace is the hold-down before removing a backend that
-	// stopped being advertised.
-	// +optional
-	WithdrawalGrace *metav1.Duration `json:"withdrawalGrace,omitempty"`
-
-	// additionDelay is how long a newly-advertised route must be settled
-	// before it's added as a backend.
-	// +optional
-	AdditionDelay *metav1.Duration `json:"additionDelay,omitempty"`
-
-	// +optional
-	Dampening *DampeningConfig `json:"dampening,omitempty"`
-}
-
-// DampeningConfig configures RFC 2439-style flap dampening.
-type DampeningConfig struct {
-	// +optional
-	Enabled bool `json:"enabled,omitempty"`
-
-	// +optional
-	HalfLife *metav1.Duration `json:"halfLife,omitempty"`
-
-	// +optional
-	SuppressThreshold *int32 `json:"suppressThreshold,omitempty"`
-
-	// +optional
-	ReuseThreshold *int32 `json:"reuseThreshold,omitempty"`
-
-	// +optional
-	MaxSuppress *metav1.Duration `json:"maxSuppress,omitempty"`
 }
 
 // ActiveHealthConfig configures HTTP-level health checking of selected

@@ -23,14 +23,18 @@ package snapshot
 import (
 	"context"
 	"fmt"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kregv1alpha1 "github.com/phenixblue/kreg/api/v1alpha1"
 	"github.com/phenixblue/kreg/internal/authorize"
+	"github.com/phenixblue/kreg/internal/damp"
 	"github.com/phenixblue/kreg/internal/ingest"
 	"github.com/phenixblue/kreg/internal/pipeline"
+	"github.com/phenixblue/kreg/internal/reconcile"
+	"github.com/phenixblue/kreg/internal/report"
 )
 
 // communityMapName is the conventional name for the (typically singular)
@@ -40,14 +44,26 @@ import (
 // does for any route with no matching rule.
 const communityMapName = "default"
 
+// stabilityConfigName is BGPStabilityConfig's conventional singular
+// name, same convention as communityMapName. A cluster with no
+// BGPStabilityConfig yet is equally unremarkable — Damp evaluates
+// against a zero-value BGPStabilityConfigSpec, which reproduces
+// pre-Damper behavior (no hold-down grace, no addition delay, dampening
+// disabled).
+const stabilityConfigName = "default"
+
 // +kubebuilder:rbac:groups=kreg.twr.dev,resources=communitymaps,verbs=get;list;watch
+// +kubebuilder:rbac:groups=kreg.twr.dev,resources=bgpstabilityconfigs,verbs=get;list;watch
+// +kubebuilder:rbac:groups=kreg.twr.dev,resources=advertisedbackends,verbs=get;list;watch
 
 // Source implements controller.SnapshotSource against real BGP data:
 // pull the current RIB, authorize it against every BGPPeerConfig's
-// clusterBindings, then normalize against the CommunityMap.
+// clusterBindings, normalize against the CommunityMap, then damp against
+// each candidate's prior AdvertisedBackend state.
 type Source struct {
 	Client client.Client
 	RIB    ingest.RIB
+	Damper damp.Damper
 }
 
 // Snapshot implements controller.SnapshotSource.
@@ -86,5 +102,45 @@ func (s *Source) Snapshot(ctx context.Context) ([]pipeline.BackendCandidate, err
 	if err != nil {
 		return nil, fmt.Errorf("normalize: %w", err)
 	}
-	return candidates, nil
+
+	var stabilityConfig kregv1alpha1.BGPStabilityConfig
+	switch err := s.Client.Get(ctx, client.ObjectKey{Name: stabilityConfigName}, &stabilityConfig); {
+	case err == nil:
+	case apierrors.IsNotFound(err):
+		// no BGPStabilityConfig yet — Evaluate handles a zero-value spec.
+	default:
+		return nil, fmt.Errorf("get BGPStabilityConfig %q: %w", stabilityConfigName, err)
+	}
+
+	prior := map[string]damp.PriorState{}
+	if needsPriorState(stabilityConfig.Spec) {
+		var existing kregv1alpha1.AdvertisedBackendList
+		if err := s.Client.List(ctx, &existing,
+			client.MatchingLabels{reconcile.ManagedByLabel: report.ManagedByValue}); err != nil {
+			return nil, fmt.Errorf("list AdvertisedBackends: %w", err)
+		}
+		prior = damp.PriorStateFromAdvertisedBackends(existing.Items)
+	}
+
+	return s.Damper.Evaluate(time.Now(), candidates, prior, stabilityConfig.Spec), nil
+}
+
+// needsPriorState reports whether spec can ever make Evaluate behave
+// differently depending on a candidate's prior state. When
+// withdrawalGrace and additionDelay are both unset/zero and dampening is
+// disabled, every code path in ewma.Damper.Evaluate that consults prior
+// state resolves the same way regardless of what's in it (grace <= 0
+// means a withdrawn candidate is never synthesized even with a real
+// prior; a disabled/absent dampening config never suppresses regardless
+// of accumulated score) — so listing AdvertisedBackends cluster-wide on
+// every tick just to build a prior map Evaluate would ignore is pure
+// overhead, and skipped.
+func needsPriorState(spec kregv1alpha1.BGPStabilityConfigSpec) bool {
+	if spec.WithdrawalGrace != nil && spec.WithdrawalGrace.Duration > 0 {
+		return true
+	}
+	if spec.AdditionDelay != nil && spec.AdditionDelay.Duration > 0 {
+		return true
+	}
+	return spec.Dampening != nil && spec.Dampening.Enabled
 }

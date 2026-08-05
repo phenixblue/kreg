@@ -74,8 +74,9 @@ filters.
 
 ## 2. CRD surface
 
-Five kinds. Two are infra-role (cluster-scoped), one is a policy-attachment
-object (namespaced), one is a reusable decoder, one is read-only status.
+Six kinds. Two are infra-role (cluster-scoped), one is a policy-attachment
+object (namespaced), two are reusable cluster-scoped config singletons, one
+is read-only status.
 
 ### 2.1 `BGPPeerConfig` — cluster-scoped, infra role
 
@@ -205,16 +206,6 @@ spec:
       preference: [us-east, us-west, eu-west]
       failoverThreshold: 50         # % of local capacity healthy before spilling
 
-  stability:
-    withdrawalGrace: 30s            # hold-down before removing a backend
-    additionDelay: 10s              # don't act on a route until it's settled
-    dampening:
-      enabled: true
-      halfLife: 90s
-      suppressThreshold: 3000       # RFC 2439-style penalties
-      reuseThreshold: 750
-      maxSuppress: 30m
-
   # BGP is reachability, not application health. Both are required.
   activeHealth:
     path: /healthz
@@ -247,7 +238,43 @@ backend at all; the tradeoff is losing HTTP-level routing and
 a client cert, verified by the backend — is deferred until a real
 regulatory-boundary deployment justifies the added PKI.
 
-### 2.4 `AdvertisedBackend` — cluster-scoped, controller-written, read-only
+### 2.4 `BGPStabilityConfig` — cluster-scoped, reusable
+
+How route churn is smoothed before it reaches generated Gateway API /
+Istio config: hold-down, addition debounce, and flap dampening. Singular
+and cluster-scoped, same convention as `CommunityMap`, rather than
+attached per-`BGPBackendPolicy`: a backend's hold-down and dampening
+state (`AdvertisedBackend.status`) is one value per prefix+clusterID,
+independent of which policy or policies currently select it, so there's
+no principled per-policy owner for this config.
+
+```yaml
+apiVersion: kreg.twr.dev/v1alpha1
+kind: BGPStabilityConfig
+metadata:
+  name: default
+spec:
+  withdrawalGrace: 30s            # hold-down before removing a backend
+  additionDelay: 10s              # don't act on a route until it's settled
+  dampening:
+    enabled: true
+    halfLife: 90s
+    suppressThreshold: 3000       # instability score that triggers suppression
+    reuseThreshold: 750           # score it must decay back below to reuse
+    maxSuppress: 30m              # hard cap regardless of score
+```
+
+The dampening algorithm — an exponentially-decaying instability score,
+bumped on each flap and decayed against real elapsed time — sits behind
+an internal interface (`internal/damp.Damper`), not a user-selectable
+field here: `halfLife`/`suppressThreshold`/`reuseThreshold`/`maxSuppress`
+describe its tunable behavior, not its implementation, so a second
+algorithm can replace the first without an API change. A cluster with no
+`BGPStabilityConfig` yet is a valid, unremarkable state: hold-down grace
+and addition delay default to none, dampening defaults to disabled — the
+same behavior as before the Damper existed.
+
+### 2.5 `AdvertisedBackend` — cluster-scoped, controller-written, read-only
 
 The materialized view of the RIB. This exists so that "why isn't traffic
 going to atl-2" is answerable with `kubectl get advertisedbackends` instead
@@ -274,22 +301,31 @@ status:
     asPath: [4200000101]
     largeCommunities: ["4200000000:1:80", "4200000000:4:80"]
 
-  state: Active         # Active | HoldDown | Draining | Dampened | Rejected
+  state: Active         # Active | HoldDown | Draining | Dampened | Pending | Rejected
   reason: ""            # e.g. "prefix 203.0.113.5/32 not in allowedPrefixes for atl-1"
-  flapCount24h: 2
-  dampeningPenalty: 340
   firstSeen: "2026-08-01T09:14:22Z"
   lastChange: "2026-08-04T02:11:07Z"
+
+  # The Damper's own bookkeeping, grouped so the full hold-down/flap/
+  # suppression picture reads at a glance. withdrawnAt, suppressedSince,
+  # and pendingSince are only set while this backend is actually in that
+  # condition — nil here, since it's currently Active.
+  stability:
+    flapCount24h: 2
+    dampeningPenalty: 340
+    lastObservedAt: "2026-08-04T02:11:07Z"
 
   boundPolicies: ["gateways/prod-web"]
   generatedResources: ["EndpointSlice/gateways/prod-web-kreg-atl-1"]
 ```
 
-### 2.5 `BGPGatewayClassConfig` — optional, cluster-scoped
+### 2.6 `BGPGatewayClassConfig` — optional, cluster-scoped
 
-Defaults so every `BGPBackendPolicy` doesn't restate the same stability and
-health blocks. Merge semantics: policy overrides class, class overrides
-built-in defaults.
+Defaults so every `BGPBackendPolicy` doesn't restate the same
+`activeHealth`/`outlierDetection` blocks. Merge semantics: policy overrides
+class, class overrides built-in defaults. `stability` isn't part of this —
+it's a single cluster-wide `BGPStabilityConfig` (§2.4), not per-policy or
+per-class.
 
 ---
 

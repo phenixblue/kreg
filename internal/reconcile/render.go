@@ -79,11 +79,20 @@ func Render(policy *kregv1alpha1.BGPBackendPolicy, candidates []pipeline.Backend
 }
 
 // Select filters candidates to those matching a BGPBackendPolicy's
-// selector, excluding any candidate CommunityMap rejected outright.
+// selector, excluding any candidate Authorize/CommunityMap rejected
+// outright, or that Damp has currently suppressed. A candidate in
+// HoldDown is deliberately still selected — per
+// docs/design/architecture.md §4, hold-down exists so a transient BGP
+// blip doesn't drain a healthy cluster; excluding it immediately would
+// make hold-down behave identically to instant removal.
 func Select(candidates []pipeline.BackendCandidate, sel kregv1alpha1.BackendSelector) ([]pipeline.BackendCandidate, error) {
 	var selected []pipeline.BackendCandidate
 	for _, c := range candidates {
 		if c.Rejected {
+			continue
+		}
+		if c.Damping != nil &&
+			(c.Damping.State == kregv1alpha1.BackendStateDampened || c.Damping.State == kregv1alpha1.BackendStatePending) {
 			continue
 		}
 		if len(sel.ClusterIDs) > 0 && !slices.Contains(sel.ClusterIDs, c.ClusterID) {
@@ -147,6 +156,24 @@ func EndpointSliceName(serviceName, clusterID, prefix string) string {
 // without drifting from what Render actually generates.
 func SanitizeForName(prefix string) string {
 	return strings.NewReplacer(".", "-", "/", "-", ":", "-").Replace(prefix)
+}
+
+// unattributedClusterID names an AdvertisedBackend whose route Authorize
+// rejected before any cluster could be attributed — ClusterID is empty
+// in that case, and an empty name segment isn't a usable object name.
+const unattributedClusterID = "unattributed"
+
+// BackendObjectName matches docs/design/architecture.md §2.5's
+// convention: "198.51.100.10/32" + "atl-1" -> "198-51-100-10-32-atl-1".
+// It's the AdvertisedBackend object name for a given prefix+clusterID —
+// exported so internal/damp can key cross-tick state by the same name
+// internal/report uses to write the object, without either duplicating
+// this logic or one package reaching into the other.
+func BackendObjectName(prefix, clusterID string) string {
+	if clusterID == "" {
+		clusterID = unattributedClusterID
+	}
+	return SanitizeForName(prefix) + "-" + clusterID
 }
 
 func managedByLabels(policy *kregv1alpha1.BGPBackendPolicy, extra map[string]string) map[string]string {

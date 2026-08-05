@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -32,8 +33,9 @@ import (
 )
 
 const (
-	testAtl1Address = "198.51.100.10/32"
-	testAtl1        = "atl-1"
+	testAtl1Address     = "198.51.100.10/32"
+	testAtl1            = "atl-1"
+	testAtl1BackendName = "198-51-100-10-32-atl-1"
 )
 
 var _ = Describe("AdvertisedBackend Controller", func() {
@@ -102,7 +104,7 @@ var _ = Describe("AdvertisedBackend Controller", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		var activeBackend kregv1alpha1.AdvertisedBackend
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "198-51-100-10-32-atl-1"}, &activeBackend)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: testAtl1BackendName}, &activeBackend)).To(Succeed())
 		Expect(activeBackend.Status.State).To(Equal(kregv1alpha1.BackendStateActive))
 		Expect(activeBackend.Status.BoundPolicies).To(ConsistOf(policyNamespace + "/" + policyName))
 		Expect(activeBackend.Status.GeneratedResources).To(ConsistOf("EndpointSlice/" + policyNamespace + "/" + policyName + "-kreg-atl-1-198-51-100-10-32"))
@@ -118,7 +120,7 @@ var _ = Describe("AdvertisedBackend Controller", func() {
 		By("reconciling again with the same candidates: FirstSeen is preserved, no duplicate objects")
 		_, err = r.Reconcile(ctx, reconcile.Request{})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "198-51-100-10-32-atl-1"}, &activeBackend)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: testAtl1BackendName}, &activeBackend)).To(Succeed())
 		Expect(activeBackend.Status.FirstSeen.Time).To(Equal(firstSeen.Time))
 
 		By("reconciling with the rejected route withdrawn entirely: its record is pruned")
@@ -127,6 +129,112 @@ var _ = Describe("AdvertisedBackend Controller", func() {
 		Expect(err).NotTo(HaveOccurred())
 		err = k8sClient.Get(ctx, types.NamespacedName{Name: "203-0-113-5-32-unattributed"}, &rejectedBackend)
 		Expect(apierrors.IsNotFound(err)).To(BeTrue())
+	})
+
+	It("persists a HoldDown candidate's state without bumping LastChange on LastObservedAt/Reason drift alone", func() {
+		base := time.Now().Truncate(time.Second)
+		withdrawnAt := base.Add(-4 * time.Second)
+		holdDown := pipeline.BackendCandidate{
+			Prefix:    testAtl1Address,
+			ClusterID: testAtl1,
+			Damping: &pipeline.DampingInfo{
+				State:          kregv1alpha1.BackendStateHoldDown,
+				Reason:         "withdrawn 4s ago, grace 30s",
+				LastObservedAt: base,
+				WithdrawnAt:    &withdrawnAt,
+			},
+		}
+
+		r := &AdvertisedBackendReconciler{
+			Client:   k8sClient,
+			Scheme:   k8sClient.Scheme(),
+			Snapshot: fakeSnapshotSource{candidates: []pipeline.BackendCandidate{holdDown}},
+		}
+		_, err := r.Reconcile(ctx, reconcile.Request{})
+		Expect(err).NotTo(HaveOccurred())
+
+		var backend kregv1alpha1.AdvertisedBackend
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: testAtl1BackendName}, &backend)).To(Succeed())
+		Expect(backend.Status.State).To(Equal(kregv1alpha1.BackendStateHoldDown))
+		Expect(backend.Status.LastChange).NotTo(BeNil())
+		lastChange := backend.Status.LastChange.Time
+
+		By("reconciling again with LastObservedAt advanced and Reason's elapsed-time text updated: LastChange doesn't bump")
+		holdDown.Damping.LastObservedAt = base.Add(5 * time.Second)
+		holdDown.Damping.Reason = "withdrawn 9s ago, grace 30s" // same State, text alone reflects more elapsed time
+		r.Snapshot = fakeSnapshotSource{candidates: []pipeline.BackendCandidate{holdDown}}
+		_, err = r.Reconcile(ctx, reconcile.Request{})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: testAtl1BackendName}, &backend)).To(Succeed())
+		Expect(backend.Status.LastChange.Time).To(Equal(lastChange))
+		Expect(backend.Status.Stability.LastObservedAt.Time).To(Equal(holdDown.Damping.LastObservedAt))
+		Expect(backend.Status.Reason).To(Equal(holdDown.Damping.Reason))
+	})
+
+	It("doesn't bump LastChange when only the decaying penalty/flap count drift", func() {
+		// DampeningPenalty and FlapCount24h decay a little on every tick,
+		// even with zero new flaps, as long as any residual score hasn't
+		// fully decayed to zero -- neither is a semantic change by itself.
+		active := pipeline.BackendCandidate{
+			Prefix:    testAtl1Address,
+			ClusterID: testAtl1,
+			Damping: &pipeline.DampingInfo{
+				State:          kregv1alpha1.BackendStateActive,
+				Score:          933,
+				FlapCount24h:   1,
+				LastObservedAt: time.Now(),
+			},
+		}
+
+		r := &AdvertisedBackendReconciler{
+			Client:   k8sClient,
+			Scheme:   k8sClient.Scheme(),
+			Snapshot: fakeSnapshotSource{candidates: []pipeline.BackendCandidate{active}},
+		}
+		_, err := r.Reconcile(ctx, reconcile.Request{})
+		Expect(err).NotTo(HaveOccurred())
+
+		var backend kregv1alpha1.AdvertisedBackend
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: testAtl1BackendName}, &backend)).To(Succeed())
+		lastChange := backend.Status.LastChange.Time
+
+		By("reconciling again with the score/flap count decayed further, state/reason unchanged")
+		active.Damping = &pipeline.DampingInfo{
+			State:          kregv1alpha1.BackendStateActive,
+			Score:          812, // decayed from 933, still nonzero
+			FlapCount24h:   1,
+			LastObservedAt: time.Now(),
+		}
+		r.Snapshot = fakeSnapshotSource{candidates: []pipeline.BackendCandidate{active}}
+		_, err = r.Reconcile(ctx, reconcile.Request{})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: testAtl1BackendName}, &backend)).To(Succeed())
+		Expect(backend.Status.LastChange.Time).To(Equal(lastChange))
+		Expect(backend.Status.Stability.DampeningPenalty).To(Equal(int32(812)))
+	})
+
+	It("treats a Rejected candidate's reason change as semantic, unlike HoldDown/Dampened", func() {
+		// Unlike HoldDown/Dampened, Rejected's reason describes a stable
+		// condition (which allowedPrefixes rule excluded it) that can
+		// genuinely change -- e.g. a clusterBindings edit -- while the
+		// candidate stays Rejected throughout, and that's a real change
+		// an operator needs reflected. Tested directly against
+		// statusChanged rather than through a full Reconcile round-trip:
+		// LastChange is stamped from metav1.Now(), which truncates to
+		// whole seconds, so two reconciles issued back-to-back in a test
+		// can't reliably observe it change without an added sleep --
+		// statusChanged's own decision is what's under test here.
+		old := kregv1alpha1.AdvertisedBackendStatus{
+			Prefix: "203.0.113.5/32",
+			State:  kregv1alpha1.BackendStateRejected,
+			Reason: "prefix 203.0.113.5/32 not in allowedPrefixes for any cluster",
+		}
+		latest := old
+		latest.Reason = "prefix 203.0.113.5/32 not in allowedPrefixes for cluster atl-3"
+
+		Expect(statusChanged(old, latest)).To(BeTrue())
 	})
 
 	It("never deletes an AdvertisedBackend it didn't create", func() {

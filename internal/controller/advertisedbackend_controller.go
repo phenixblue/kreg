@@ -122,12 +122,51 @@ func (r *AdvertisedBackendReconciler) applyBackend(ctx context.Context, desired 
 	}
 }
 
-// statusChanged reports whether anything but the timestamps themselves
-// differs between old and new.
+// statusChanged reports whether anything but continuously-updating
+// bookkeeping differs between old and new. Stability.LastObservedAt
+// bumps on every reconcile (Damp re-evaluates every candidate each
+// tick); Stability.DampeningPenalty and .FlapCount24h decay a little on
+// every tick too, even with zero flaps, as long as any residual score
+// hasn't fully decayed to zero.
+//
+// Reason is excluded only for the specific states whose Reason text
+// itself embeds a continuously-drifting value — HoldDown's "withdrawn
+// Xs ago" (X grows every tick) and Dampened's "score X" (X decays every
+// tick) — via reasonDrifts. Every other state's Reason stays in the
+// comparison: Pending's is a fixed function of additionDelay (same text
+// every tick unless the config itself changes, which should bump
+// LastChange), and Rejected's describes a stable condition (e.g. which
+// allowedPrefixes rule excluded it) that can genuinely change — e.g. a
+// clusterBindings edit — while the candidate stays Rejected throughout,
+// which is exactly the kind of change an operator needs reflected.
+// WithdrawnAt/SuppressedSince/PendingSince stay in the comparison too:
+// those only change at real transition points.
 func statusChanged(old, latest kregv1alpha1.AdvertisedBackendStatus) bool {
 	old.FirstSeen, old.LastChange = nil, nil
+	if reasonDrifts(old.State) {
+		old.Reason = ""
+	}
+	old.Stability.LastObservedAt, old.Stability.DampeningPenalty, old.Stability.FlapCount24h = nil, 0, 0
+
 	latest.FirstSeen, latest.LastChange = nil, nil
+	if reasonDrifts(latest.State) {
+		latest.Reason = ""
+	}
+	latest.Stability.LastObservedAt, latest.Stability.DampeningPenalty, latest.Stability.FlapCount24h = nil, 0, 0
+
 	return !reflect.DeepEqual(old, latest)
+}
+
+// reasonDrifts reports whether state's own Reason text (see
+// internal/damp/ewma) embeds a value that changes on essentially every
+// tick regardless of whether anything semantic changed.
+func reasonDrifts(state kregv1alpha1.BackendState) bool {
+	switch state {
+	case kregv1alpha1.BackendStateHoldDown, kregv1alpha1.BackendStateDampened:
+		return true
+	default:
+		return false
+	}
 }
 
 // pruneStaleBackends deletes AdvertisedBackend records for routes no
