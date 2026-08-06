@@ -18,7 +18,11 @@ sudo -n true || { echo "passwordless sudo access is required (containerlab wires
 
 log "containerlab topology (frr-rr-a, frr-rr-b, hub, spoke-a, spoke-b)"
 cd "${TIER2_DIR}"
-sudo -n containerlab destroy -t topology.clab.yml --cleanup 2>&1 || true
+if ! sudo -n containerlab inspect -t topology.clab.yml >/dev/null 2>&1; then
+	echo "nothing deployed - nothing to tear down"
+	exit 0
+fi
+sudo -n containerlab destroy -t topology.clab.yml --cleanup
 
 echo
 echo "Torn down. Rerun hack/tier2/up.sh to bring it back."

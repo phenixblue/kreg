@@ -48,10 +48,10 @@ make docker-build IMG="${IMG}" >/dev/null
 
 log "containerlab topology (frr-rr-a, frr-rr-b, hub, spoke-a, spoke-b)"
 cd "${TIER2_DIR}"
-if sudo containerlab inspect -t topology.clab.yml >/dev/null 2>&1; then
+if sudo -n containerlab inspect -t topology.clab.yml >/dev/null 2>&1; then
 	echo "lab already deployed - skipping (run down.sh first for a clean rebuild)"
 else
-	sudo containerlab deploy -t topology.clab.yml
+	sudo -n containerlab deploy -t topology.clab.yml
 fi
 
 for c in hub spoke-a spoke-b; do
