@@ -27,10 +27,14 @@ into, which doesn't work through Docker Desktop/OrbStack's VM boundary on
 a Mac — this is exactly the limitation §5's Tier 2 section calls out. An
 OrbStack (or Lima/UTM) Linux VM works fine; run `up.sh` from inside it.
 
-Needs `docker`, `kind`, `kubectl`, `helm`, `containerlab`, `go`, and `git`
-on `PATH` inside that VM — `up.sh` checks for all of them up front. Not
-idempotent the way `hack/tier1/up.sh` is (see `up.sh`'s own comment for
-why); safe to re-run only when nothing's changed.
+Needs `docker`, `kind`, `kubectl`, `helm`, `containerlab`, `go`, `git`,
+`make`, and `openssl` on `PATH` inside that VM, plus the usual POSIX
+utilities (`sed`, `grep`, `mktemp`, `seq`, `sleep`) and `sudo` — `up.sh`
+checks for all of them up front. Not idempotent the way
+`hack/tier1/up.sh` is for topology/config changes (see `up.sh`'s own
+comment for why); safe to re-run only when the topology and CNI/BGP
+config haven't changed — a re-run does correctly pick up a rebuilt
+controller image and a rotated whoami TLS cert (see below).
 
 ```bash
 hack/tier2/up.sh      # takes a few minutes: 3 kind clusters, 2 CNIs, Istio

@@ -20,9 +20,12 @@
 #
 # NOT idempotent the way hack/tier1/up.sh is: this stands up 5
 # interlinked nodes across 3 Kubernetes clusters plus two CNIs, and
-# reconciling a changed topology in place is riskier than it's worth for
-# a dev rig. Safe to re-run only when nothing changed; otherwise run
-# down.sh first.
+# reconciling a changed topology or CNI/BGP config in place is riskier
+# than it's worth for a dev rig. Safe to re-run only when the topology
+# and CNI/BGP config haven't changed; otherwise run down.sh first. A
+# re-run does correctly force-restart kreg-controller and both whoami
+# pods to pick up a rebuilt image and a rotated TLS cert respectively -
+# see the force-delete calls below.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
