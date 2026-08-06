@@ -20,7 +20,7 @@ spec:
       containers:
         - name: whoami
           # Pinned by digest (v1.12.0) for reproducibility.
-          image: traefik/whoami:latest@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44
+          image: traefik/whoami@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44
           args: ["-name", "spoke-b", "-port", "443", "-cert", "/certs/tls.crt", "-key", "/certs/tls.key"]
           ports:
             - containerPort: 443

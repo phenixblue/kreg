@@ -31,7 +31,7 @@ IMG="${IMG:-kreg-controller:tier2}"
 
 log() { printf '\n==> %s\n' "$*"; }
 
-for bin in docker kind kubectl helm containerlab go git make openssl sed grep mktemp seq sudo; do
+for bin in docker kind kubectl helm containerlab go git make openssl sed grep mktemp seq sleep sudo; do
 	command -v "${bin}" >/dev/null || { echo "missing required tool: ${bin}" >&2; exit 1; }
 done
 # containerlab needs root to wire veth links into other containers'

@@ -25,7 +25,7 @@ topology:
       # after 8.4.1 (hence the "8.4_git" version string this reports) in
       # favor of quay.io/frrouting/frr, which has current releases —
       # worth moving to if this rig outlives that Docker Hub image.
-      image: frrouting/frr:latest@sha256:990e83490108b686fd6df3b1cafa6bdbb2714acb00eedb9a89693946f46f45ce
+      image: frrouting/frr@sha256:990e83490108b686fd6df3b1cafa6bdbb2714acb00eedb9a89693946f46f45ce
       network-mode: none
       binds:
         - frr-rr-a/daemons:/etc/frr/daemons
@@ -41,7 +41,7 @@ topology:
     frr-rr-b:
       kind: linux
       # Same image as frr-rr-a — see the pinning note there.
-      image: frrouting/frr:latest@sha256:990e83490108b686fd6df3b1cafa6bdbb2714acb00eedb9a89693946f46f45ce
+      image: frrouting/frr@sha256:990e83490108b686fd6df3b1cafa6bdbb2714acb00eedb9a89693946f46f45ce
       network-mode: none
       binds:
         - frr-rr-b/daemons:/etc/frr/daemons
