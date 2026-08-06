@@ -1,0 +1,52 @@
+# Real HTTP backend for the Tier 2 rig's full round-trip check —
+# traefik/whoami, an identity-echo app: its response body names which
+# spoke actually served the request. Serves HTTPS on 443 from a mounted
+# cert (see up.sh, which creates the whoami-tls secret): backend.tls.mode
+# SIMPLE is the only TLS posture the Istio driver implements, and it's
+# required, so the backend has to actually speak TLS.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whoami
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: whoami
+  template:
+    metadata:
+      labels:
+        app: whoami
+    spec:
+      containers:
+        - name: whoami
+          # Pinned by digest (v1.12.0) for reproducibility.
+          image: traefik/whoami@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44
+          args: ["-name", "spoke-a", "-port", "443", "-cert", "/certs/tls.crt", "-key", "/certs/tls.key"]
+          ports:
+            - containerPort: 443
+          volumeMounts:
+            - name: certs
+              mountPath: /certs
+              readOnly: true
+      volumes:
+        - name: certs
+          secret:
+            secretName: whoami-tls
+---
+# Pinned to a specific /32 (not left to auto-allocate) so
+# hack/tier2/calico/bgp.yaml's serviceLoadBalancerIPs can advertise
+# exactly this address instead of the whole pool CIDR.
+apiVersion: v1
+kind: Service
+metadata:
+  name: whoami
+  annotations:
+    projectcalico.org/loadBalancerIPs: '["198.51.100.10"]'
+spec:
+  type: LoadBalancer
+  selector:
+    app: whoami
+  ports:
+    - port: 443
+      targetPort: 443

@@ -1,0 +1,121 @@
+# frr-rr-a and frr-rr-b peer directly with each other (see each frr.conf's
+# non-route-reflector-client "rr-peer" neighbor) so each learns the
+# other's redistributed connected subnets. Without this, Calico's BIRD
+# (which doesn't set next-hop-self per BGP session, so it advertises the
+# same next-hop to both RRs) produces routes one RR can resolve and the
+# other can't - whichever RR isn't directly connected to that next-hop
+# marks the route "inaccessible" and never installs it, even though it
+# has a perfectly healthy direct session with the client that sent it.
+#
+# That RR-RR session is filtered (each frr.conf's RR-PEER-IN route-map)
+# to only the underlay P2P subnets, not client-advertised VIPs. Without
+# the filter, a route reflector reflects what it learns from its own
+# clients to its RR peer too - so each RR would end up with two paths
+# for the same VIP (direct from its own client, and reflected via the
+# other RR), and which one wins best-path isn't reliably the direct one.
+# The filter keeps the RR-RR link doing only the one thing it's actually
+# needed for.
+name: tier2
+topology:
+  nodes:
+    frr-rr-a:
+      kind: linux
+      # Pinned by digest, not just tag, for full reproducibility. Note
+      # for future maintainers: FRR stopped publishing to Docker Hub
+      # after 8.4.1 (hence the "8.4_git" version string this reports) in
+      # favor of quay.io/frrouting/frr, which has current releases —
+      # worth moving to if this rig outlives that Docker Hub image.
+      image: frrouting/frr@sha256:990e83490108b686fd6df3b1cafa6bdbb2714acb00eedb9a89693946f46f45ce
+      network-mode: none
+      binds:
+        - frr-rr-a/daemons:/etc/frr/daemons
+        - frr-rr-a/frr.conf:/etc/frr/frr.conf
+        - frr-rr-a/vtysh.conf:/etc/frr/vtysh.conf
+      exec:
+        - sysctl -w net.ipv4.ip_forward=1
+        - ip addr add 10.201.0.1/30 dev eth1
+        - ip addr add 10.201.0.9/30 dev eth2
+        - ip addr add 10.201.0.17/30 dev eth3
+        - ip addr add 10.201.1.1/30 dev eth4
+
+    frr-rr-b:
+      kind: linux
+      # Same image as frr-rr-a — see the pinning note there.
+      image: frrouting/frr@sha256:990e83490108b686fd6df3b1cafa6bdbb2714acb00eedb9a89693946f46f45ce
+      network-mode: none
+      binds:
+        - frr-rr-b/daemons:/etc/frr/daemons
+        - frr-rr-b/frr.conf:/etc/frr/frr.conf
+        - frr-rr-b/vtysh.conf:/etc/frr/vtysh.conf
+      exec:
+        - sysctl -w net.ipv4.ip_forward=1
+        - ip addr add 10.201.0.5/30 dev eth1
+        - ip addr add 10.201.0.13/30 dev eth2
+        - ip addr add 10.201.0.21/30 dev eth3
+        - ip addr add 10.201.1.2/30 dev eth4
+
+    hub:
+      kind: k8s-kind
+
+    hub-control-plane:
+      kind: ext-container
+      exec:
+        - ip addr add 10.201.0.2/30 dev eth1
+        - ip link set dev eth1 up
+        - ip addr add 10.201.0.6/30 dev eth2
+        - ip link set dev eth2 up
+        # kreg-controller's embedded GoBGP is a RIB consumer only — see
+        # docs/design/architecture.md's "KREG generates config. It is
+        # never in the packet path." It deliberately never programs the
+        # kernel FIB, so real backend traffic needs a real route to each
+        # VIP. In production this is the job of a real router at the
+        # network edge; here, each route points at the RR directly
+        # connected to that VIP's origin spoke, not the RR-RR link above
+        # — that link fixes BGP-level route validity (see the comment at
+        # the top of this file), but forwarding actual data traffic
+        # through it as a transit hop doesn't work reliably, for reasons
+        # not fully root-caused. Routing directly avoids needing it.
+        - ip route add 198.51.100.10/32 via 10.201.0.1 dev eth1
+        - ip route add 198.51.100.74/32 via 10.201.0.5 dev eth2
+
+    spoke-a:
+      kind: k8s-kind
+      startup-config: kind-configs/spoke-a.yaml
+
+    spoke-a-control-plane:
+      kind: ext-container
+      exec:
+        - ip addr add 10.201.0.10/30 dev eth1
+        - ip link set dev eth1 up
+        - ip addr add 10.201.0.14/30 dev eth2
+        - ip link set dev eth2 up
+
+    spoke-b:
+      kind: k8s-kind
+      startup-config: kind-configs/spoke-b.yaml
+
+    spoke-b-control-plane:
+      kind: ext-container
+      exec:
+        - ip addr add 10.201.0.18/30 dev eth1
+        - ip link set dev eth1 up
+        - ip addr add 10.201.0.22/30 dev eth2
+        - ip link set dev eth2 up
+        # Calico's BIRD installs learned BGP routes into the kernel like
+        # a real router, so spoke-a needs no equivalent of this. Cilium's
+        # BGP control plane doesn't — it's scoped to service/pod-CIDR
+        # advertisement, not general route learning — so without this,
+        # return traffic from whoami back to hub has no route and the
+        # TCP handshake times out even though every BGP table looks
+        # correct. frr-rr-b is the next-hop for the same reason as hub's
+        # route above.
+        - ip route add 10.201.0.0/24 via 10.201.0.21 dev eth2
+
+  links:
+    - endpoints: ["frr-rr-a:eth4", "frr-rr-b:eth4"]
+    - endpoints: ["frr-rr-a:eth1", "hub-control-plane:eth1"]
+    - endpoints: ["frr-rr-b:eth1", "hub-control-plane:eth2"]
+    - endpoints: ["frr-rr-a:eth2", "spoke-a-control-plane:eth1"]
+    - endpoints: ["frr-rr-b:eth2", "spoke-a-control-plane:eth2"]
+    - endpoints: ["frr-rr-a:eth3", "spoke-b-control-plane:eth1"]
+    - endpoints: ["frr-rr-b:eth3", "spoke-b-control-plane:eth2"]

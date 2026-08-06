@@ -1,0 +1,41 @@
+# Simulates spoke-a from docs/design/architecture.md's worked example
+# (clusterID atl-1, 198.51.100.0/26). serviceLoadBalancerIPs is scoped to
+# the single /32 whoami actually gets (not the whole /26) — Calico
+# advertises whatever CIDR you give it as one aggregate route, so a
+# broader range here would advertise the entire block instead of a real,
+# individually routable host address. See hack/tier2/whoami/spoke-a.yaml
+# for where that address is pinned.
+apiVersion: projectcalico.org/v3
+kind: BGPConfiguration
+metadata:
+  name: default
+spec:
+  asNumber: 4200000000
+  nodeToNodeMeshEnabled: false
+  serviceLoadBalancerIPs:
+    - cidr: 198.51.100.10/32
+---
+apiVersion: projectcalico.org/v3
+kind: BGPPeer
+metadata:
+  name: rr-a
+spec:
+  peerIP: 10.201.0.9
+  asNumber: 4200000000
+---
+apiVersion: projectcalico.org/v3
+kind: BGPPeer
+metadata:
+  name: rr-b
+spec:
+  peerIP: 10.201.0.13
+  asNumber: 4200000000
+---
+apiVersion: projectcalico.org/v3
+kind: IPPool
+metadata:
+  name: whoami-lb-pool
+spec:
+  cidr: 198.51.100.0/26
+  allowedUses:
+    - LoadBalancer

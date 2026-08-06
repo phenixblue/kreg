@@ -1,0 +1,55 @@
+# Unlike hack/tier1 (which deliberately leaves this out - see its
+# README's "What it doesn't do"), Tier 2's whole point includes proving a
+# real HTTP request round-trips through Envoy to a real backend pod, so
+# this ships by default. selector.prefixes covers both spokes'
+# ClusterBindings (198.51.100.0/26 and .64/26) in one shot, so
+# prod-web-kreg gets EndpointSlice entries for both - repeated requests
+# through the gateway should show responses from both spoke-a and
+# spoke-b.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: prod-web
+  namespace: gateways
+spec:
+  gatewayClassName: istio
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: Same
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: prod-web
+  namespace: gateways
+spec:
+  parentRefs:
+    - name: prod-web
+  rules:
+    - backendRefs:
+        - name: prod-web-kreg
+          port: 443
+---
+apiVersion: kreg.twr.dev/v1alpha1
+kind: BGPBackendPolicy
+metadata:
+  name: prod-web
+  namespace: gateways
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: prod-web
+  selector:
+    prefixes: ["198.51.100.0/24"]
+  backend:
+    port: 443
+    tls:
+      mode: SIMPLE
+      sni: whoami.tier2.local
+      credentialRef:
+        name: whoami-ca
