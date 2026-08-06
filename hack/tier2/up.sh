@@ -102,8 +102,8 @@ kubectl --context kind-spoke-a apply -f whoami/spoke-a.yaml >/dev/null
 # pod keeps serving the old cert even after the Secret (and hub's
 # whoami-ca trust anchor, updated later in this script) move on to the
 # new one, breaking TLS validation on a re-run. Same fix as
-# kreg-controller above: force a fresh pod so it picks up the current
-# cert.
+# kreg-controller further down: force a fresh pod so it picks up the
+# current cert.
 kubectl --context kind-spoke-a delete pods -l app=whoami --ignore-not-found --wait=false || true
 echo "waiting for whoami on spoke-a..."
 whoami_ready=""
@@ -253,7 +253,7 @@ for i in $(seq 1 30); do
 done
 if [ "${established}" != "2" ]; then
 	echo "BGP sessions did not both reach Established in time:" >&2
-	kubectl --context kind-hub get bgppeerconfig tier2-rig -o yaml >&2 | sed -n '/^status:/,$p' >&2
+	kubectl --context kind-hub get bgppeerconfig tier2-rig -o yaml | sed -n '/^status:/,$p' >&2
 	exit 1
 fi
 
