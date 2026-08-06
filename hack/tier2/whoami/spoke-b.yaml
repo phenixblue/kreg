@@ -1,8 +1,9 @@
-# See spoke-a.yaml for why this serves HTTPS. bgp: enabled matches
-# hack/tier2/cilium/bgp.yaml's CiliumBGPAdvertisement selector; the pinned
-# IP (lbipam.cilium.io/ips) is cosmetic here — Cilium's advertisement
-# tracks whatever gets allocated dynamically — but keeps the address
-# predictable across rig rebuilds, matching spoke-a's convention.
+# See spoke-a.yaml for why this serves HTTPS. The bgp: enabled label
+# matches hack/tier2/cilium/bgp.yaml's CiliumBGPAdvertisement selector;
+# the pinned IP (lbipam.cilium.io/ips) is cosmetic here — Cilium's
+# advertisement tracks whatever gets allocated dynamically — but keeps
+# the address predictable across rig rebuilds, matching spoke-a's
+# convention.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
