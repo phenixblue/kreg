@@ -31,7 +31,7 @@ IMG="${IMG:-kreg-controller:tier2}"
 
 log() { printf '\n==> %s\n' "$*"; }
 
-for bin in docker kind kubectl helm containerlab go git openssl sed grep mktemp seq sudo; do
+for bin in docker kind kubectl helm containerlab go git make openssl sed grep mktemp seq sudo; do
 	command -v "${bin}" >/dev/null || { echo "missing required tool: ${bin}" >&2; exit 1; }
 done
 # containerlab needs root to wire veth links into other containers'
@@ -119,7 +119,13 @@ helm upgrade --install istio-base istio/base -n istio-system --set defaultRevisi
 	--wait --kube-context kind-hub >/dev/null
 helm upgrade --install istiod istio/istiod -n istio-system --wait --timeout 3m --kube-context kind-hub >/dev/null
 kubectl --context kind-hub apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.1/standard-install.yaml >/dev/null
-KUBECONFIG="${HOME}/.kube/config" kubectl config use-context kind-hub >/dev/null
+# make install's own kubectl calls have no --context flag of their own,
+# so they rely on whatever the ambient kubeconfig's current-context is.
+# No KUBECONFIG override here — respects whatever the caller already has
+# set (the kind export kubeconfig calls above did too), rather than
+# assuming ~/.kube/config, which would be wrong for a caller using a
+# different kubeconfig path.
+kubectl config use-context kind-hub >/dev/null
 (cd "${REPO_ROOT}" && make install >/dev/null)
 "${REPO_ROOT}/bin/kustomize" build "${REPO_ROOT}/config/tier2" |
 	sed "s|kreg-controller:tier2|${IMG}|" | kubectl --context kind-hub apply -f - >/dev/null

@@ -6,6 +6,15 @@
 # other can't - whichever RR isn't directly connected to that next-hop
 # marks the route "inaccessible" and never installs it, even though it
 # has a perfectly healthy direct session with the client that sent it.
+#
+# That RR-RR session is filtered (each frr.conf's RR-PEER-IN route-map)
+# to only the underlay P2P subnets, not client-advertised VIPs. Without
+# the filter, a route reflector reflects what it learns from its own
+# clients to its RR peer too - so each RR would end up with two paths
+# for the same VIP (direct from its own client, and reflected via the
+# other RR), and which one wins best-path isn't reliably the direct one.
+# The filter keeps the RR-RR link doing only the one thing it's actually
+# needed for.
 name: tier2
 topology:
   nodes:

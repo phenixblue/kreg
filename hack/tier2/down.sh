@@ -11,9 +11,14 @@ TIER2_DIR="${REPO_ROOT}/hack/tier2"
 
 log() { printf '\n==> %s\n' "$*"; }
 
+# Non-interactive, matching up.sh: fail fast rather than let a
+# password prompt hang teardown while the trailing || true below still
+# prints a false "torn down" success.
+sudo -n true || { echo "passwordless sudo access is required (containerlab wires network namespaces as root)" >&2; exit 1; }
+
 log "containerlab topology (frr-rr-a, frr-rr-b, hub, spoke-a, spoke-b)"
 cd "${TIER2_DIR}"
-sudo containerlab destroy -t topology.clab.yml --cleanup 2>&1 || true
+sudo -n containerlab destroy -t topology.clab.yml --cleanup 2>&1 || true
 
 echo
 echo "Torn down. Rerun hack/tier2/up.sh to bring it back."
