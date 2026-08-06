@@ -67,7 +67,7 @@ openssl req -x509 -newkey rsa:2048 -nodes \
 	-subj "/CN=whoami.tier2.local" -addext "subjectAltName=DNS:whoami.tier2.local" >/dev/null 2>&1
 
 log "Calico on spoke-a (clusterID atl-1, VIP 198.51.100.10)"
-helm repo add projectcalico https://docs.tigera.io/calico/charts >/dev/null 2>&1 || true
+helm repo add projectcalico https://docs.tigera.io/calico/charts --force-update >/dev/null
 helm repo update projectcalico >/dev/null
 kubectl --context kind-spoke-a create namespace tigera-operator --dry-run=client -o yaml | kubectl --context kind-spoke-a apply -f - >/dev/null
 helm template calico-crds projectcalico/crd.projectcalico.org.v1 --version v3.32.1 |
@@ -99,7 +99,7 @@ kubectl --context kind-spoke-a create secret tls whoami-tls \
 kubectl --context kind-spoke-a apply -f whoami/spoke-a.yaml >/dev/null
 
 log "Cilium on spoke-b (clusterID atl-2, VIP 198.51.100.74)"
-helm repo add cilium https://helm.cilium.io/ >/dev/null 2>&1 || true
+helm repo add cilium https://helm.cilium.io/ --force-update >/dev/null
 helm repo update cilium >/dev/null
 helm upgrade --install cilium cilium/cilium --version 1.20.0 \
 	-f cilium/values.yaml --namespace kube-system --kube-context kind-spoke-b >/dev/null
@@ -113,7 +113,7 @@ kubectl --context kind-spoke-b apply -f whoami/spoke-b.yaml >/dev/null
 
 log "Istio + KREG CRDs + kreg-controller on hub"
 kubectl --context kind-hub create namespace istio-system --dry-run=client -o yaml | kubectl --context kind-hub apply -f - >/dev/null
-helm repo add istio https://istio-release.storage.googleapis.com/charts >/dev/null 2>&1 || true
+helm repo add istio https://istio-release.storage.googleapis.com/charts --force-update >/dev/null
 helm repo update istio >/dev/null
 helm upgrade --install istio-base istio/base -n istio-system --set defaultRevision=default \
 	--wait --kube-context kind-hub >/dev/null
