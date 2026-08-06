@@ -37,6 +37,15 @@ hack/tier2/up.sh      # takes a few minutes: 3 kind clusters, 2 CNIs, Istio
 hack/tier2/down.sh    # tears down everything, including all 3 kind clusters
 ```
 
+Re-running `up.sh` against an already-deployed lab force-restarts
+kreg-controller and both whoami pods so they pick up a rebuilt image and
+the freshly-regenerated TLS cert respectively — otherwise `IMG`'s fixed
+tag means `kubectl apply` wouldn't roll them just because the bytes
+behind that tag changed. Right after a re-run, give istiod/Envoy a few
+seconds to reconverge before trying a round trip — a `curl` in the first
+moment or two after "Rig is up" can transiently 503 while xDS catches up
+with the fresh pods, same as after any rolling restart.
+
 ## Topology
 
 ```

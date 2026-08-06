@@ -97,6 +97,27 @@ kubectl --context kind-spoke-a create secret tls whoami-tls \
 	--cert="${CERT_DIR}/tls.crt" --key="${CERT_DIR}/tls.key" \
 	--dry-run=client -o yaml | kubectl --context kind-spoke-a apply -f - >/dev/null
 kubectl --context kind-spoke-a apply -f whoami/spoke-a.yaml >/dev/null
+# The cert above is regenerated fresh every run, but whoami only reads
+# tls.crt/tls.key from its mounted volume at startup — an already-running
+# pod keeps serving the old cert even after the Secret (and hub's
+# whoami-ca trust anchor, updated later in this script) move on to the
+# new one, breaking TLS validation on a re-run. Same fix as
+# kreg-controller above: force a fresh pod so it picks up the current
+# cert.
+kubectl --context kind-spoke-a delete pods -l app=whoami --ignore-not-found --wait=false || true
+echo "waiting for whoami on spoke-a..."
+whoami_ready=""
+for i in $(seq 1 30); do
+	whoami_ready=$(kubectl --context kind-spoke-a get pods -l app=whoami \
+		-o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+	[ "${whoami_ready}" = "True" ] && break
+	sleep 2
+done
+if [ "${whoami_ready}" != "True" ]; then
+	echo "whoami on spoke-a did not become ready in time:" >&2
+	kubectl --context kind-spoke-a get pods -l app=whoami >&2 || true
+	exit 1
+fi
 
 log "Cilium on spoke-b (clusterID atl-2, VIP 198.51.100.74)"
 helm repo add cilium https://helm.cilium.io/ --force-update >/dev/null
@@ -110,6 +131,21 @@ kubectl --context kind-spoke-b create secret tls whoami-tls \
 	--cert="${CERT_DIR}/tls.crt" --key="${CERT_DIR}/tls.key" \
 	--dry-run=client -o yaml | kubectl --context kind-spoke-b apply -f - >/dev/null
 kubectl --context kind-spoke-b apply -f whoami/spoke-b.yaml >/dev/null
+# Same reasoning as spoke-a above.
+kubectl --context kind-spoke-b delete pods -l app=whoami --ignore-not-found --wait=false || true
+echo "waiting for whoami on spoke-b..."
+whoami_ready=""
+for i in $(seq 1 30); do
+	whoami_ready=$(kubectl --context kind-spoke-b get pods -l app=whoami \
+		-o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+	[ "${whoami_ready}" = "True" ] && break
+	sleep 2
+done
+if [ "${whoami_ready}" != "True" ]; then
+	echo "whoami on spoke-b did not become ready in time:" >&2
+	kubectl --context kind-spoke-b get pods -l app=whoami >&2 || true
+	exit 1
+fi
 
 log "Istio + KREG CRDs + kreg-controller on hub"
 kubectl --context kind-hub create namespace istio-system --dry-run=client -o yaml | kubectl --context kind-hub apply -f - >/dev/null
@@ -130,12 +166,31 @@ kubectl config use-context kind-hub >/dev/null
 "${REPO_ROOT}/bin/kustomize" build "${REPO_ROOT}/config/tier2" |
 	sed "s|kreg-controller:tier2|${IMG}|" | kubectl --context kind-hub apply -f - >/dev/null
 
+# IMG is a fixed tag, not a per-build digest — kubectl apply sees the
+# same image string every run and won't roll the Deployment just because
+# the bytes behind that tag changed (same issue hack/tier1/up.sh already
+# works around). Force a fresh pod unconditionally so re-running this
+# after a code change actually deploys it; best-effort (|| true), since
+# --ignore-not-found doesn't cover every race here.
+kubectl --context kind-hub -n kreg-tier2 delete pods -l control-plane=controller-manager --ignore-not-found --wait=false || true
+
+# Poll by label rather than `kubectl wait` on a resolved pod name: with
+# hostNetwork, the old and new pod can't both hold the same host port on
+# one node, so the delete above can still be in flight when we start
+# waiting — re-querying the label selector each iteration is immune to
+# that (see hack/tier1/up.sh's identical comment for the full reasoning).
 echo "waiting for kreg-controller..."
 ready=""
 for i in $(seq 1 30); do
 	ready=$(kubectl --context kind-hub -n kreg-tier2 get pods -l control-plane=controller-manager \
 		-o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
 	[ "${ready}" = "True" ] && break
+	# Stuck on the hostNetwork port conflict from a prior pod that hasn't
+	# finished terminating yet: nudge it along. Harmless/no-op otherwise.
+	if [ "${i}" -eq 15 ]; then
+		kubectl --context kind-hub -n kreg-tier2 delete pods -l control-plane=controller-manager \
+			--field-selector=status.phase=Pending --ignore-not-found --wait=false || true
+	fi
 	sleep 2
 done
 if [ "${ready}" != "True" ]; then
