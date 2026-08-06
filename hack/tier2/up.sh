@@ -31,9 +31,16 @@ IMG="${IMG:-kreg-controller:tier2}"
 
 log() { printf '\n==> %s\n' "$*"; }
 
-for bin in docker kind kubectl helm containerlab go git; do
+for bin in docker kind kubectl helm containerlab go git openssl sed grep mktemp seq sudo; do
 	command -v "${bin}" >/dev/null || { echo "missing required tool: ${bin}" >&2; exit 1; }
 done
+# containerlab needs root to wire veth links into other containers'
+# network namespaces. -n (non-interactive) rather than -v: this rig only
+# works non-interactively against passwordless sudo anyway (containerlab
+# itself is invoked the same way below), so failing fast here on the
+# same terms is more honest than prompting for a password up front and
+# then failing later regardless.
+sudo -n true || { echo "passwordless sudo access is required (containerlab wires network namespaces as root)" >&2; exit 1; }
 
 log "kreg-controller image (${IMG})"
 cd "${REPO_ROOT}"
@@ -75,10 +82,16 @@ kubectl --context kind-spoke-a wait node --all --for=condition=Ready --timeout=3
 # kubectl apply here can race it ("no matches for kind BGPConfiguration")
 # even though the base CRDs already exist.
 echo "waiting for the projectcalico.org/v3 API to be available..."
+calico_api_ready=""
 for i in $(seq 1 60); do
-	kubectl --context kind-spoke-a get bgpconfigurations.projectcalico.org >/dev/null 2>&1 && break
+	kubectl --context kind-spoke-a get bgpconfigurations.projectcalico.org >/dev/null 2>&1 && { calico_api_ready=1; break; }
 	sleep 2
 done
+if [ -z "${calico_api_ready}" ]; then
+	echo "projectcalico.org/v3 API never became available - calico-apiserver status:" >&2
+	kubectl --context kind-spoke-a get pods -n calico-system -l k8s-app=calico-apiserver >&2 || true
+	exit 1
+fi
 kubectl --context kind-spoke-a apply -f calico/bgp.yaml >/dev/null
 kubectl --context kind-spoke-a create secret tls whoami-tls \
 	--cert="${CERT_DIR}/tls.crt" --key="${CERT_DIR}/tls.key" \
@@ -112,12 +125,18 @@ KUBECONFIG="${HOME}/.kube/config" kubectl config use-context kind-hub >/dev/null
 	sed "s|kreg-controller:tier2|${IMG}|" | kubectl --context kind-hub apply -f - >/dev/null
 
 echo "waiting for kreg-controller..."
+ready=""
 for i in $(seq 1 30); do
 	ready=$(kubectl --context kind-hub -n kreg-tier2 get pods -l control-plane=controller-manager \
 		-o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
 	[ "${ready}" = "True" ] && break
 	sleep 2
 done
+if [ "${ready}" != "True" ]; then
+	echo "kreg-controller did not become ready in time:" >&2
+	kubectl --context kind-hub -n kreg-tier2 get pods -l control-plane=controller-manager >&2 || true
+	exit 1
+fi
 
 log "BGPPeerConfig + CommunityMap fixtures"
 kubectl --context kind-hub apply -f - <<EOF
@@ -164,12 +183,18 @@ kubectl --context kind-hub -n gateways create secret generic whoami-ca \
 kubectl --context kind-hub apply -f gateway.yaml >/dev/null
 
 log "waiting for BGP sessions to establish"
+established=0
 for i in $(seq 1 30); do
 	established=$(kubectl --context kind-hub get bgppeerconfig tier2-rig \
 		-o jsonpath='{range .status.peers[*]}{.sessionState}{"\n"}{end}' 2>/dev/null | grep -c Established || true)
 	[ "${established}" = "2" ] && break
 	sleep 2
 done
+if [ "${established}" != "2" ]; then
+	echo "BGP sessions did not both reach Established in time:" >&2
+	kubectl --context kind-hub get bgppeerconfig tier2-rig -o yaml >&2 | sed -n '/^status:/,$p' >&2
+	exit 1
+fi
 
 echo
 kubectl --context kind-hub get bgppeerconfig tier2-rig -o yaml | sed -n '/^status:/,$p'
